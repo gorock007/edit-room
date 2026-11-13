@@ -9,6 +9,7 @@ import { getProject, listProjects, readModel, type Project } from "./projects.ts
 import { buildProxy, proxyFile, proxyState } from "./proxy.ts";
 import { enqueue, quiet, stop } from "./agent.ts";
 import { KEYS, applyOption, hasOption, optionProject } from "./options.ts";
+import { hasPassword, isRemote, login, logout, needsLogin, sessionOk } from "./auth.ts";
 import { loadComments, newId, restore, saveComments, updateComment, type Comment } from "./store.ts";
 
 const app = express();
@@ -21,8 +22,26 @@ const allowed = (req: http.IncomingMessage) => {
 };
 app.use((req, res, next) => (allowed(req) ? next() : res.status(403).send("forbidden")));
 app.use(express.json({ limit: "1mb" }));
+
+// ---- login: needed by anything that is not this Mac (the phone over Tailscale) ----
+app.get("/api/me", (req, res) => res.json({ remote: isRemote(req), authed: !needsLogin(req), hasPassword: hasPassword() }));
+app.post("/api/login", async (req, res) => {
+  if (!isRemote(req)) return res.json({ ok: true });
+  const r = await login(String(req.body?.password ?? ""), String(req.headers["user-agent"] ?? ""));
+  if ("error" in r) return res.status(r.status).json({ error: r.error });
+  res.setHeader("Set-Cookie", r.cookie).json({ ok: true });
+});
+app.post("/api/logout", (req, res) => res.setHeader("Set-Cookie", logout(req)).json({ ok: true }));
+// The app's own files (the login screen is part of it) load without a session; everything with data needs one.
+const PRIVATE = /^\/(api|media|overlay|ws)(\/|$)/;
+app.use((req, res, next) => (PRIVATE.test(req.path) && needsLogin(req) ? res.status(401).json({ error: "login required" }) : next()));
+
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: "/ws", verifyClient: ({ req }: { req: http.IncomingMessage }) => allowed(req) && req.headers.origin != null });
+const wss = new WebSocketServer({
+  server,
+  path: "/ws",
+  verifyClient: ({ req }: { req: http.IncomingMessage }) => allowed(req) && req.headers.origin != null && (!isRemote(req) || sessionOk(req)),
+});
 
 const send = (msg: unknown) => {
   const s = JSON.stringify(msg);
@@ -234,11 +253,12 @@ app.get("/overlay/:id/{*rest}", withProject((p, req, res) => {
   res.sendFile(f);
 }));
 
-// production build
+// the built app (what the phone loads; `npm run dev` keeps it rebuilt)
 const dist = path.resolve(import.meta.dirname, "../dist");
-if (fs.existsSync(dist)) {
-  app.use(express.static(dist));
-  app.get("/{*any}", (_req, res) => res.sendFile(path.join(dist, "index.html")));
-}
+app.use(express.static(dist, { index: false }));
+app.get("/{*any}", (_req, res) => {
+  const index = path.join(dist, "index.html");
+  fs.existsSync(index) ? res.set("Cache-Control", "no-cache").sendFile(index) : res.status(404).send("Not built yet: run npm run build");
+});
 
 server.listen(PORT, HOST, () => console.log(`edit room server on http://${HOST}:${PORT}`));

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 
@@ -9,6 +10,7 @@ export const SKILL_DIR = process.env.ROOM_SKILL_DIR ?? path.join(home, ".claude/
 export const DATA_DIR = process.env.ROOM_DATA_DIR ?? path.resolve(import.meta.dirname, "../data");
 export const PORT = Number(process.env.ROOM_PORT ?? 4310);
 // localhost only: anyone who can reach this server can make the agent run commands on this Mac.
+// Other devices (the phone) come in through `tailscale serve`, which forwards to this loopback port, and must log in.
 export const HOST = process.env.ROOM_HOST ?? "127.0.0.1";
 export const PROXY_WIDTH = 960;
 
@@ -36,7 +38,27 @@ export const inside = (p: string, roots: string[]) => {
   });
 };
 
+/** Where the login password hash and sessions live (never in the repo). */
+export const AUTH_DIR = process.env.ROOM_AUTH_DIR ?? DATA_DIR;
+/** Ask for the password even on this Mac (for testing the login screen). */
+export const REQUIRE_LOGIN = process.env.ROOM_REQUIRE_LOGIN === "1";
+
+/** This Mac's Tailscale name (e.g. my-mac.tailnet.ts.net), so the phone's requests pass the Host/Origin checks. */
+function tailscaleName(): string[] {
+  if (process.env.ROOM_PUBLIC_HOST != null) return process.env.ROOM_PUBLIC_HOST.split(",").map((s) => s.trim()).filter(Boolean);
+  for (const bin of ["tailscale", "/usr/local/bin/tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"]) {
+    try {
+      const out = execFileSync(bin, ["status", "--json"], { encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"] });
+      const name = String(JSON.parse(out)?.Self?.DNSName ?? "").replace(/\.$/, "");
+      return name ? [name] : [];
+    } catch {}
+  }
+  return [];
+}
+export const PUBLIC_HOSTS = tailscaleName();
+
 /** Only the app itself may call the server: blocks DNS rebinding (Host) and other websites (Origin). */
 export const APP_PORTS = [PORT, Number(process.env.ROOM_WEB_PORT ?? 5310)];
-export const ALLOWED_HOSTS = new Set(APP_PORTS.flatMap((p) => [`127.0.0.1:${p}`, `localhost:${p}`, `[::1]:${p}`]));
-export const ALLOWED_ORIGINS = new Set([...ALLOWED_HOSTS].map((h) => `http://${h}`));
+export const LOCAL_HOSTS = new Set(APP_PORTS.flatMap((p) => [`127.0.0.1:${p}`, `localhost:${p}`, `[::1]:${p}`]));
+export const ALLOWED_HOSTS = new Set([...LOCAL_HOSTS, ...PUBLIC_HOSTS, ...PUBLIC_HOSTS.map((h) => `${h}:443`)]);
+export const ALLOWED_ORIGINS = new Set([...[...LOCAL_HOSTS].map((h) => `http://${h}`), ...PUBLIC_HOSTS.map((h) => `https://${h}`)]);
