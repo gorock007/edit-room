@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --color-ink-950: #09090a;
+  --color-ink-900: #0f0f11;
+  --color-ink-850: #141417;
+  --color-ink-800: #1a1a1e;
+  --color-ink-700: #26262c;
+  --color-ink-600: #34343c;
+  --color-ink-500: #4a4a54;
+  --color-ink-400: #6e6e7a;
+  --color-ink-300: #9a9aa6;
+  --color-ink-200: #c8c8d0;
+  --color-ink-100: #ececf0;
+  --color-gold: #f5c445;
+  --color-gold-dim: #a8862f;
+  --color-cap: #7aa2ff;
+  --color-sfx: #5fd3a8;
+  --color-cut: #b39cff;
+  --color-broll: #ff9f6e;
+}
+
+html, body, #root { height: 100%; }
+body {
+  @apply bg-ink-950 text-ink-100 font-sans antialiased;
+  font-feature-settings: "cv11", "ss01";
+}
+.tnum { font-variant-numeric: tabular-nums; }
+::selection { background: color-mix(in oklab, var(--color-gold) 35%, transparent); }
+
+/* thin scrollbars */
+* { scrollbar-width: thin; scrollbar-color: var(--color-ink-600) transparent; }
+
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-gold) 55%, transparent); }
+  100% { box-shadow: 0 0 0 10px transparent; }
+}
+.pulse-ring { animation: pulse-ring 1.4s ease-out infinite; }
+@keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+.shimmer {
+  background: linear-gradient(90deg, transparent 0%, color-mix(in oklab, var(--color-gold) 18%, transparent) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.8s linear infinite;
+}
