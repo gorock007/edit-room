@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -12,10 +13,30 @@ export const HOST = process.env.ROOM_HOST ?? "127.0.0.1";
 export const PROXY_WIDTH = 960;
 
 /** Roots the app may read media from and the agent may write to. */
-export const WRITE_ROOTS = [VIDEO_ROOT, CAPCUT_DRAFTS, DATA_DIR, os.tmpdir(), "/private/tmp", "/tmp"];
-export const READ_ROOTS = [...WRITE_ROOTS, SKILL_DIR, path.join(home, ".claude")];
+// the agent may write only the user's video folders and scratch space; the skill and the app's undo history stay read-only
+export const WRITE_ROOTS = [VIDEO_ROOT, CAPCUT_DRAFTS, os.tmpdir(), "/private/tmp", "/tmp"];
+export const READ_ROOTS = [...WRITE_ROOTS, DATA_DIR, SKILL_DIR, path.join(home, ".claude")];
+
+/** Resolve symlinks (for a path that does not exist yet, its nearest existing parent) so a link can't escape a root. */
+const real = (p: string): string => {
+  const r = path.resolve(p);
+  try {
+    return fs.realpathSync(r);
+  } catch {
+    const parent = path.dirname(r);
+    return parent === r ? r : path.join(real(parent), path.basename(r));
+  }
+};
 
 export const inside = (p: string, roots: string[]) => {
-  const r = path.resolve(p);
-  return roots.some((root) => r === root || r.startsWith(root.endsWith("/") ? root : root + "/"));
+  const r = real(p);
+  return roots.some((root0) => {
+    const root = real(root0);
+    return r === root || r.startsWith(root + "/");
+  });
 };
+
+/** Only the app itself may call the server: blocks DNS rebinding (Host) and other websites (Origin). */
+export const APP_PORTS = [PORT, Number(process.env.ROOM_WEB_PORT ?? 5310)];
+export const ALLOWED_HOSTS = new Set(APP_PORTS.flatMap((p) => [`127.0.0.1:${p}`, `localhost:${p}`, `[::1]:${p}`]));
+export const ALLOWED_ORIGINS = new Set([...ALLOWED_HOSTS].map((h) => `http://${h}`));

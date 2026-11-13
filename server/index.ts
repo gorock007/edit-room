@@ -4,16 +4,24 @@ import http from "node:http";
 import express from "express";
 import { WebSocketServer, WebSocket } from "ws";
 import chokidar, { type FSWatcher } from "chokidar";
-import { HOST, PORT, READ_ROOTS, inside } from "./config.ts";
+import { ALLOWED_HOSTS, ALLOWED_ORIGINS, HOST, PORT, READ_ROOTS, inside } from "./config.ts";
 import { getProject, listProjects, readModel, type Project } from "./projects.ts";
 import { buildProxy, proxyFile, proxyState } from "./proxy.ts";
 import { enqueue, stop } from "./agent.ts";
 import { loadComments, newId, restore, saveComments, updateComment, type Comment } from "./store.ts";
 
 const app = express();
+// Every request must come from the app itself. A comment makes the agent run commands, so a web page in another tab
+// must not be able to post one: the Host check stops DNS rebinding, the Origin check stops cross-site requests.
+const allowed = (req: http.IncomingMessage) => {
+  const host = String(req.headers.host ?? "");
+  const origin = req.headers.origin;
+  return ALLOWED_HOSTS.has(host) && (origin == null || ALLOWED_ORIGINS.has(origin));
+};
+app.use((req, res, next) => (allowed(req) ? next() : res.status(403).send("forbidden")));
 app.use(express.json({ limit: "1mb" }));
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: "/ws" });
+const wss = new WebSocketServer({ server, path: "/ws", verifyClient: ({ req }: { req: http.IncomingMessage }) => allowed(req) && req.headers.origin != null });
 
 const send = (msg: unknown) => {
   const s = JSON.stringify(msg);
@@ -122,10 +130,11 @@ app.get("/media/:id/frame/:cid.png", withProject((p, req, res) => {
   fs.existsSync(f) ? res.sendFile(f) : res.status(404).end();
 }));
 
-/** Sound files from the draft; only from the folders the app knows about. */
+/** Sound files: only the exact files this project's draft uses. */
 app.get("/media/:id/file", withProject((p, req, res) => {
   const f = String(req.query.p ?? "");
-  if (!inside(f, READ_ROOTS) || !fs.existsSync(f)) return res.status(404).end();
+  const known = readModel(p).sfx.some((s) => s.file === f);
+  if (!known || !inside(f, READ_ROOTS) || !fs.existsSync(f)) return res.status(404).end();
   res.sendFile(f);
 }));
 

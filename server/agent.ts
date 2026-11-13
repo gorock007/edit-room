@@ -155,13 +155,13 @@ async function runOne(p: Project, commentId: string, hooks: Hooks) {
       prompt: buildPrompt(c, p, framePath),
       options: {
         cwd: VIDEO_ROOT, // the user's memory and project instructions are keyed to this folder
-        additionalDirectories: [CAPCUT_DRAFTS, SKILL_DIR, DATA_DIR],
+        additionalDirectories: [CAPCUT_DRAFTS], // edits auto-accepted only here and in cwd; anything else goes through canUseTool
         resume: resumeId,
         abortController: abort,
         settingSources: ["user", "project", "local"],
         systemPrompt: { type: "preset", preset: "claude_code", append: ROOM_PROMPT },
         permissionMode: "acceptEdits",
-        allowedTools: ["Read", "Glob", "Grep", "Edit", "Write", "Bash", "Skill", "mcp__room__room_refresh_picture", "mcp__room__room_note"],
+        allowedTools: ["Read", "Glob", "Grep", "Bash", "Skill", "mcp__room__room_refresh_picture", "mcp__room__room_note"],
         disallowedTools: ["Bash(rm -rf *)", "Bash(sudo *)", "Bash(git push*)", "WebSearch", "WebFetch"],
         mcpServers: { room: roomTools(p, c, hooks) },
         // nobody is at a prompt: anything not pre-approved is decided here, inside the project's folders only
