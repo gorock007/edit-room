@@ -4,11 +4,15 @@ import { query, tool, createSdkMcpServer, type SDKMessage } from "@anthropic-ai/
 import { z } from "zod";
 import { CAPCUT_DRAFTS, DATA_DIR, READ_ROOTS, SKILL_DIR, VIDEO_ROOT, WRITE_ROOTS, inside } from "./config.ts";
 import { onScreen, readModel, type Project } from "./projects.ts";
-import { buildProxy, grabFrame, proxyFile } from "./proxy.ts";
-import { changedSince, loadComments, snapshot, updateComment, type Activity, type Comment } from "./store.ts";
+import { buildProxy, grabFrame, proxyFile, proxyState } from "./proxy.ts";
+import { changedSince, loadComments, restore, snapshot, updateComment, type Activity, type Comment } from "./store.ts";
+import { KEYS, optionProject, saveOption } from "./options.ts";
 
 type Emit = (c: Comment) => void;
-type Hooks = { emit: Emit; projectChanged: (p: Project) => void };
+type Hooks = { emit: Emit; projectChanged: (p: Project) => void; overlayChanged: (p: Project) => void };
+
+/** Projects where the agent is trying options in the real files: their file watchers stay quiet meanwhile. */
+export const quiet = new Set<string>();
 
 const queues = new Map<string, Promise<void>>();
 const aborts = new Map<string, AbortController>();
@@ -87,7 +91,15 @@ Paths:
 - edit folder: ${p.editDir}
 - caption composition: ${p.overlaysDir ?? "(none)"}
 - CapCut draft: ${p.draftDir ?? "(none)"}
-- skill: ${SKILL_DIR}`;
+- skill: ${SKILL_DIR}${(c.want ?? 1) > 1 ? `
+
+The user asked for ${c.want} OPTIONS, to compare side by side before choosing. Make ${c.want} clearly different takes
+on the request (not ${c.want} near-identical ones). For each option, in turn:
+1. make the change in the real files, exactly as you would for a single change;
+2. call room_save_option with a short label (under 8 words, e.g. "Smaller, moved up") describing that take.
+   The tool saves the option and puts the files back the way they were, so start the next option from the original.
+Do not call room_refresh_picture in this mode; each option's preview is prepared by room_save_option.
+Your final reply: one line per option (A, B, C…) saying what it is, and which you would pick and why.` : ""}`;
 }
 
 function roomTools(p: Project, c: Comment, hooks: Hooks) {
@@ -100,8 +112,40 @@ function roomTools(p: Project, c: Comment, hooks: Hooks) {
         "Rebuild the preview's picture proxy after changing cuts, punch-ins, b-roll or cards in the CapCut draft. Takes about a minute. Captions and sounds refresh on their own.",
         {},
         async () => {
+          if ((c.want ?? 1) > 1) return { content: [{ type: "text", text: "Not needed in options mode: room_save_option prepares each option's preview." }] };
           await buildProxy(p, () => hooks.projectChanged(p));
           return { content: [{ type: "text", text: "Picture proxy rebuilt; the user's preview reloaded." }] };
+        },
+      ),
+      tool(
+        "room_save_option",
+        "Options mode only: save the change you just made as the next option (A, B, C…) with a short label, then put the files back to how they were before this comment, ready for the next option.",
+        { label: z.string() },
+        async ({ label }) => {
+          const done = loadComments(p).find((x) => x.id === c.id)?.options?.length ?? 0;
+          if (done >= (c.want ?? 1)) return { content: [{ type: "text", text: `All ${c.want} options are saved already.` }], isError: true };
+          const changed = changedSince(p, c.id);
+          if (!changed.length) return { content: [{ type: "text", text: "Nothing has changed since the start, so there is no option to save." }], isError: true };
+          const key = KEYS[done];
+          saveOption(p, c.id, key, label, changed);
+          restore(p, c.id, changed);
+          const op = optionProject(p, c.id, key);
+          const pictureChanged = readModel(op).pictureHash !== readModel(p).pictureHash;
+          const u = updateComment(p, c.id, (x) => {
+            x.options = [...(x.options ?? []), { key, note: label, files: changed, pictureChanged, picture: pictureChanged ? "building" : "ready" }];
+            x.activity.push({ at: Date.now(), kind: "info", text: `Option ${key} saved: ${label}` });
+          });
+          if (u) hooks.emit(u);
+          if (pictureChanged)
+            buildProxy(op, () => {}).then(() => {
+              const st = proxyState(op).status === "ready" ? "ready" : "failed";
+              const v = updateComment(p, c.id, (x) => {
+                const o = x.options?.find((o) => o.key === key);
+                if (o) o.picture = st;
+              });
+              if (v) hooks.emit(v);
+            });
+          return { content: [{ type: "text", text: `Saved as option ${key}; files restored to the original${pictureChanged ? "; its picture preview is building" : ""}.` }] };
         },
       ),
       tool(
@@ -144,6 +188,8 @@ async function runOne(p: Project, commentId: string, hooks: Hooks) {
     await grabFrame(p, c.t, c.x, c.y, framePath).catch(() => (framePath = null));
   }
   snapshot(p, c.id);
+  const optionsMode = (c.want ?? 1) > 1;
+  if (optionsMode) quiet.add(p.id);
 
   const abort = new AbortController();
   aborts.set(c.id, abort);
@@ -161,7 +207,7 @@ async function runOne(p: Project, commentId: string, hooks: Hooks) {
         settingSources: ["user", "project", "local"],
         systemPrompt: { type: "preset", preset: "claude_code", append: ROOM_PROMPT },
         permissionMode: "acceptEdits",
-        allowedTools: ["Read", "Glob", "Grep", "Bash", "Skill", "mcp__room__room_refresh_picture", "mcp__room__room_note"],
+        allowedTools: ["Read", "Glob", "Grep", "Bash", "Skill", "mcp__room__room_refresh_picture", "mcp__room__room_note", "mcp__room__room_save_option"],
         disallowedTools: ["Bash(rm -rf *)", "Bash(sudo *)", "Bash(git push*)", "WebSearch", "WebFetch"],
         mcpServers: { room: roomTools(p, c, hooks) },
         // nobody is at a prompt: anything not pre-approved is decided here, inside the project's folders only
@@ -195,15 +241,25 @@ async function runOne(p: Project, commentId: string, hooks: Hooks) {
       set((x) => x.activity.push({ at: Date.now(), kind: "info", text: "Started a fresh agent session" }));
       await attempt(undefined); // the stored session may be gone
     }
-    const changed = changedSince(p, c.id);
+    let changed = changedSince(p, c.id);
+    if (optionsMode && changed.length) {
+      restore(p, c.id, changed); // anything not saved as an option is not wanted
+      set((x) => x.activity.push({ at: Date.now(), kind: "info", text: "Put back changes that were not saved as an option" }));
+      changed = [];
+    }
     set((x) => {
-      x.status = failed ? "failed" : "done";
-      x.reply = finalText || (failed ? "The agent stopped with an error." : "Done.");
+      const opts = x.options?.length ?? 0;
+      x.status = failed ? "failed" : optionsMode ? (opts ? "review" : "failed") : "done";
+      x.reply = finalText || (failed ? "The agent stopped with an error." : optionsMode && !opts ? "No options were saved." : "Done.");
       x.changed = changed;
       x.finishedAt = Date.now();
     });
   } catch (e: any) {
-    const changed = changedSince(p, c.id);
+    let changed = changedSince(p, c.id);
+    if (optionsMode && changed.length) {
+      restore(p, c.id, changed);
+      changed = [];
+    }
     set((x) => {
       x.status = abort.signal.aborted ? "stopped" : "failed";
       x.activity.push({ at: Date.now(), kind: "error", text: String(e?.message ?? e).slice(0, 500) });
@@ -213,6 +269,10 @@ async function runOne(p: Project, commentId: string, hooks: Hooks) {
     });
   } finally {
     aborts.delete(c.id);
+    if (optionsMode) {
+      quiet.delete(p.id);
+      hooks.overlayChanged(p); // the main preview is back to the original; make sure it shows it
+    }
     hooks.projectChanged(p);
   }
 }

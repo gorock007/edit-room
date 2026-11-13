@@ -16,7 +16,9 @@ type Props = {
   comments: Comment[];
   focusId: string | null;
   onFocus: (id: string) => void;
-  onSubmit: (c: { text: string; t: number; x: number | null; y: number | null; target: Target }) => void;
+  onSubmit: (c: { text: string; t: number; x: number | null; y: number | null; target: Target; want: number }) => void;
+  muted?: boolean;
+  onPickDisabled?: boolean;
   onVideoEvent: (e: "play" | "pause" | "seeked" | "loaded") => void;
 };
 
@@ -137,6 +139,7 @@ export const Stage = forwardRef<StageHandle, Props>(function Stage(p, ref) {
                 src={p.proxyUrl}
                 className="absolute inset-0 h-full w-full"
                 playsInline
+                muted={p.muted}
                 preload="auto"
                 onPlay={() => p.onVideoEvent("play")}
                 onPause={() => p.onVideoEvent("pause")}
@@ -195,8 +198,8 @@ export const Stage = forwardRef<StageHandle, Props>(function Stage(p, ref) {
                     target={draft.target}
                     t={draft.t}
                     onCancel={() => setDraft(null)}
-                    onSubmit={(text) => {
-                      p.onSubmit({ text, t: draft.t, x: draft.x, y: draft.y, target: draft.target });
+                    onSubmit={(text, want) => {
+                      p.onSubmit({ text, t: draft.t, x: draft.x, y: draft.y, target: draft.target, want });
                       setDraft(null);
                     }}
                   />

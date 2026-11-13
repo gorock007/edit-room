@@ -11,10 +11,13 @@ export const api = {
   model: (id: string) => fetch(`/api/projects/${id}/model`).then(j<{ model: EditModel; proxy: ProxyState }>),
   comments: (id: string) => fetch(`/api/projects/${id}/comments`).then(j<Comment[]>),
   rebuild: (id: string) => fetch(`/api/projects/${id}/proxy`, { method: "POST" }).then(j<ProxyState>),
-  post: (id: string, body: { text: string; t: number; x: number | null; y: number | null; target: Target }) =>
+  post: (id: string, body: { text: string; t: number; x: number | null; y: number | null; target: Target; want?: number }) =>
     fetch(`/api/projects/${id}/comments`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(j<Comment>),
   stop: (id: string, cid: string) => fetch(`/api/projects/${id}/comments/${cid}/stop`, { method: "POST" }).then(j<Comment>),
   undo: (id: string, cid: string) => fetch(`/api/projects/${id}/comments/${cid}/undo`, { method: "POST" }).then(j<Comment>),
+  optionModel: (id: string, cid: string, key: string) => fetch(`/api/projects/${id}/options/${cid}/${key}/model`).then(j<{ model: EditModel; proxy: ProxyState }>),
+  pick: (id: string, cid: string, key: string) =>
+    fetch(`/api/projects/${id}/comments/${cid}/pick`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key }) }).then(j<Comment>),
   fileUrl: (id: string, path: string) => `/media/${id}/file?p=${encodeURIComponent(path)}`,
 };
 

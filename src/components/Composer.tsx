@@ -20,16 +20,18 @@ export function TargetChip({ target, t }: { target: Target; t?: number }) {
   );
 }
 
-export function Composer({ target, t, onSubmit, onCancel, compact }: { target: Target; t: number; onSubmit: (text: string) => void; onCancel?: () => void; compact?: boolean }) {
+export function Composer({ target, t, onSubmit, onCancel, compact }: { target: Target; t: number; onSubmit: (text: string, want: number) => void; onCancel?: () => void; compact?: boolean }) {
   const [text, setText] = useState("");
+  const [want, setWant] = useState(1);
   const ta = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (!compact) ta.current?.focus();
   }, [compact]);
   const send = () => {
     if (text.trim()) {
-      onSubmit(text.trim());
+      onSubmit(text.trim(), want);
       setText("");
+      setWant(1);
     }
   };
   return (
@@ -58,7 +60,17 @@ export function Composer({ target, t, onSubmit, onCancel, compact }: { target: T
         className="w-full resize-none rounded-lg bg-ink-950/60 px-2.5 py-2 text-[13px] leading-snug text-ink-100 placeholder:text-ink-500 outline-none ring-1 ring-white/5 focus:ring-gold/40"
       />
       <div className="mt-2 flex items-center justify-between">
-        <span className="text-[11px] text-ink-500">Enter to send · Claude starts right away</span>
+        <div className="flex rounded-md bg-ink-950/60 p-0.5 ring-1 ring-white/5" title="Ask for options to compare side by side before anything changes">
+          {[1, 2, 3].map((n) => (
+            <button
+              key={n}
+              onClick={() => setWant(n)}
+              className={cx("rounded px-1.5 py-0.5 text-[11px] font-medium transition", want === n ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-200")}
+            >
+              {n === 1 ? "Do it" : `${n} options`}
+            </button>
+          ))}
+        </div>
         <div className="flex gap-1.5">
           {onCancel && (
             <button onClick={onCancel} className="rounded-md px-2 py-1 text-[12px] text-ink-300 hover:bg-white/5">
@@ -70,7 +82,7 @@ export function Composer({ target, t, onSubmit, onCancel, compact }: { target: T
             disabled={!text.trim()}
             className="rounded-md bg-gold px-2.5 py-1 text-[12px] font-semibold text-ink-950 transition disabled:opacity-30 hover:brightness-110"
           >
-            Send
+            {want > 1 ? `Make ${want}` : "Send"}
           </button>
         </div>
       </div>

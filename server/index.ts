@@ -7,7 +7,8 @@ import chokidar, { type FSWatcher } from "chokidar";
 import { ALLOWED_HOSTS, ALLOWED_ORIGINS, HOST, PORT, READ_ROOTS, inside } from "./config.ts";
 import { getProject, listProjects, readModel, type Project } from "./projects.ts";
 import { buildProxy, proxyFile, proxyState } from "./proxy.ts";
-import { enqueue, stop } from "./agent.ts";
+import { enqueue, quiet, stop } from "./agent.ts";
+import { KEYS, applyOption, hasOption, optionProject } from "./options.ts";
 import { loadComments, newId, restore, saveComments, updateComment, type Comment } from "./store.ts";
 
 const app = express();
@@ -29,7 +30,8 @@ const send = (msg: unknown) => {
 };
 const emitComment = (c: Comment) => send({ type: "comment", comment: c });
 const projectChanged = (p: Project) => send({ type: "project", id: p.id, proxy: proxyState(p) });
-const hooks = { emit: emitComment, projectChanged };
+const overlayChanged = (p: Project) => send({ type: "overlay", id: p.id, at: Date.now() });
+const hooks = { emit: emitComment, projectChanged, overlayChanged };
 
 // ---- live reload: the draft (sounds, cuts) and the caption composition ----
 const watchers = new Map<string, FSWatcher>();
@@ -38,6 +40,7 @@ function watch(p: Project) {
   const files = [p.draftDir && path.join(p.draftDir, "draft_info.json"), p.overlaysDir && path.join(p.overlaysDir, "index.html")].filter(Boolean) as string[];
   const w = chokidar.watch(files, { ignoreInitial: true, awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 } });
   w.on("change", (f) => {
+    if (quiet.has(p.id)) return; // the agent is trying options in these files; the user's preview stays put
     if (f.endsWith("index.html")) send({ type: "overlay", id: p.id, at: Date.now() });
     else projectChanged(p);
   });
@@ -86,6 +89,7 @@ app.post("/api/projects/:id/comments", withProject((p, req, res) => {
     target: b.target ?? { kind: "general", label: "the video" },
     status: "queued",
     activity: [],
+    want: Math.max(1, Math.min(KEYS.length, Number(b.want) || 1)),
   };
   saveComments(p, [...loadComments(p), c]);
   emitComment(c);
@@ -119,6 +123,56 @@ app.post("/api/projects/:id/comments/:cid/undo", withProject((p, req, res) => {
   res.json(u);
 }));
 
+
+// ---- options: preview each one, then use one or keep the current version ----
+const optionOf = (p: Project, req: express.Request) => {
+  const cid = String(req.params.cid), key = String(req.params.key);
+  if (!/^[a-f0-9]{10}$/.test(cid) || !KEYS.includes(key) || !hasOption(p, cid, key)) return null;
+  return { cid, key, op: optionProject(p, cid, key) };
+};
+
+app.get("/api/projects/:id/options/:cid/:key/model", withProject((p, req, res) => {
+  const o = optionOf(p, req);
+  if (!o) return res.status(404).json({ error: "no such option" });
+  res.json({ model: readModel(o.op), proxy: proxyState(o.op) });
+}));
+
+app.get("/media/:id/options/:cid/:key/proxy.mp4", withProject((p, req, res) => {
+  const o = optionOf(p, req);
+  if (!o || !fs.existsSync(proxyFile(o.op))) return res.status(404).end();
+  res.sendFile(proxyFile(o.op), { headers: { "Cache-Control": "no-cache" } });
+}));
+
+app.post("/api/projects/:id/comments/:cid/pick", withProject((p, req, res) => {
+  const cid = String(req.params.cid);
+  const key = String(req.body?.key ?? "");
+  const c = loadComments(p).find((x) => x.id === cid);
+  if (!c || c.status !== "review") return res.status(400).json({ error: "this comment has no options waiting" });
+  if (key === "current") {
+    const u = updateComment(p, cid, (x) => {
+      x.status = "done";
+      x.chosen = "current";
+      x.activity.push({ at: Date.now(), kind: "info", text: "Kept the current version" });
+    })!;
+    emitComment(u);
+    return res.json(u);
+  }
+  if (!KEYS.includes(key) || !hasOption(p, cid, key)) return res.status(400).json({ error: "no such option" });
+  const files = applyOption(p, cid, key); // undo restores the snapshot taken before the options were made
+  const opt = c.options?.find((o) => o.key === key);
+  const u = updateComment(p, cid, (x) => {
+    x.status = "done";
+    x.chosen = key;
+    x.changed = files;
+    x.activity.push({ at: Date.now(), kind: "info", text: `Using option ${key}${opt ? `: ${opt.note}` : ""}` });
+  })!;
+  emitComment(u);
+  overlayChanged(p);
+  if (proxyState(p).status === "stale") buildProxy(p, () => projectChanged(p));
+  projectChanged(p);
+  res.json(u);
+}));
+
 // ---- media ----
 app.get("/media/:id/proxy.mp4", withProject((p, _req, res) => {
   if (!fs.existsSync(proxyFile(p))) return res.status(404).end();
@@ -133,7 +187,15 @@ app.get("/media/:id/frame/:cid.png", withProject((p, req, res) => {
 /** Sound files: only the exact files this project's draft uses. */
 app.get("/media/:id/file", withProject((p, req, res) => {
   const f = String(req.query.p ?? "");
-  const known = readModel(p).sfx.some((s) => s.file === f);
+  const uses = (q: Project) => {
+    try {
+      return readModel(q).sfx.some((s) => s.file === f);
+    } catch {
+      return false;
+    }
+  };
+  // the current edit's sounds, or those of an option waiting to be compared
+  const known = uses(p) || loadComments(p).some((c) => c.status === "review" && c.options?.some((o) => uses(optionProject(p, c.id, o.key))));
   if (!known || !inside(f, READ_ROOTS) || !fs.existsSync(f)) return res.status(404).end();
   res.sendFile(f);
 }));
@@ -153,10 +215,18 @@ window.__room = {
 };
 </script>`;
 app.get("/overlay/:id/{*rest}", withProject((p, req, res) => {
-  if (!p.overlaysDir) return res.status(404).end();
-  const rest = ([] as string[]).concat((req.params as any).rest ?? []).join("/") || "index.html";
-  const f = path.resolve(p.overlaysDir, rest);
-  if (!inside(f, [p.overlaysDir]) || !fs.existsSync(f)) return res.status(404).end();
+  let rest = ([] as string[]).concat((req.params as any).rest ?? []).join("/") || "index.html";
+  let dir = p.overlaysDir;
+  const m = rest.match(/^o\/([a-f0-9]{10})\/([A-D])\/(.*)$/);
+  if (m) {
+    if (!hasOption(p, m[1], m[2])) return res.status(404).end();
+    dir = optionProject(p, m[1], m[2]).overlaysDir;
+    rest = m[3] || "index.html";
+  }
+  if (!dir) return res.status(404).end();
+  const f = path.resolve(dir, rest);
+  // an option's folder links to the real one for everything it did not change, so both are allowed roots
+  if (!inside(f, [dir, p.overlaysDir ?? dir]) || !fs.existsSync(f)) return res.status(404).end();
   if (rest === "index.html") {
     const html = fs.readFileSync(f, "utf8").replace("<head>", "<head>" + DRIVER);
     return res.type("html").set("Cache-Control", "no-store").send(html);

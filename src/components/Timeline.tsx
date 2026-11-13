@@ -10,7 +10,7 @@ type Props = {
   commentMode: boolean;
   onSeek: (t: number) => void;
   onSolo: (s: Sfx) => void;
-  onSubmit: (c: { text: string; t: number; x: null; y: null; target: Target }) => void;
+  onSubmit: (c: { text: string; t: number; x: null; y: null; target: Target; want: number }) => void;
   onFocus: (id: string) => void;
 };
 
@@ -168,8 +168,8 @@ export function Timeline(p: Props) {
             target={draft.target}
             t={draft.t}
             onCancel={() => setDraft(null)}
-            onSubmit={(text) => {
-              p.onSubmit({ text, t: draft.t, x: null, y: null, target: draft.target });
+            onSubmit={(text, want) => {
+              p.onSubmit({ text, t: draft.t, x: null, y: null, target: draft.target, want });
               setDraft(null);
             }}
           />

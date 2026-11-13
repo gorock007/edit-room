@@ -22,6 +22,9 @@ const store = {
   },
 };
 
+type Cell = { key: string; title: string; note?: string; model: EditModel; proxyUrl: string | null; proxyNote: string | null; overlayUrl: string | null };
+type NewComment = { text: string; t: number; x: number | null; y: number | null; target: Target; want: number };
+
 export default function App() {
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [pid, setPid] = useState<string | null>(store.get("room.project"));
@@ -36,8 +39,14 @@ export default function App() {
   const [focusId, setFocusId] = useState<string | null>(null);
   const [sfxOn, setSfxOn] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const stage = useRef<StageHandle>(null);
+  // side-by-side compare of a comment's options
+  const [compareId, setCompareId] = useState<string | null>(null);
+  const [optModels, setOptModels] = useState<Record<string, { model: EditModel; proxy: ProxyState }>>({});
+  const [listen, setListen] = useState("current");
+  const players = useRef<(StageHandle | null)[]>([]);
   const engine = useMemo(() => new SoundEngine(), []);
+  const focusRef = useRef(focusId);
+  focusRef.current = focusId;
 
   useEffect(() => {
     api.projects().then((ps) => {
@@ -52,26 +61,85 @@ export default function App() {
       setModel(r.model);
       setProxy(r.proxy);
       setError(null);
-      engine.load(r.model.sfx, (s) => api.fileUrl(id, s.file));
     } catch (e: any) {
       setError(e.message);
     }
-  }, [engine]);
+  }, []);
 
   useEffect(() => {
     if (!pid) return;
     store.set("room.project", pid);
     setModel(null);
     setTime(0);
+    setCompareId(null);
     loadModel(pid);
     api.comments(pid).then(setComments);
   }, [pid, loadModel]);
   useEffect(() => store.set("room.device", device), [device]);
   useEffect(() => engine.setMuted(!sfxOn), [sfxOn, engine]);
 
+  const compare = comments.find((c) => c.id === compareId && c.status === "review") ?? null;
+
+  // fetch each option's model (its captions and sounds); refetch when an option's picture finishes
+  const optionSig = compare?.options?.map((o) => `${o.key}:${o.picture}`).join(",") ?? "";
+  useEffect(() => {
+    if (!pid || !compare) return;
+    for (const o of compare.options ?? [])
+      api.optionModel(pid, compare.id, o.key).then((r) => setOptModels((m) => ({ ...m, [`${compare.id}/${o.key}`]: r }))).catch(() => {});
+  }, [pid, compare?.id, optionSig]);
+
+  const proxyUrl = pid && proxy && proxy.version > 0 ? `/media/${pid}/proxy.mp4?v=${proxy.version}` : null;
+  const proxyNote =
+    !proxy ? "Loading…" :
+    proxy.status === "building" ? (proxy.version ? "Updating the picture…" : "Building the preview — about a minute") :
+    proxy.status === "failed" ? "Picture build failed" :
+    proxy.status === "missing" ? "Preparing preview…" : null;
+  const overlayUrl = pid && model?.hasOverlay ? `/overlay/${pid}/index.html?at=${overlayAt}` : null;
+
+  const cells: Cell[] = useMemo(() => {
+    if (!model) return [];
+    const current: Cell = { key: "current", title: compare ? "Current" : "", model, proxyUrl, proxyNote, overlayUrl };
+    if (!compare || !pid) return [current];
+    return [
+      current,
+      ...(compare.options ?? []).map((o): Cell => {
+        const om = optModels[`${compare.id}/${o.key}`];
+        const own = o.pictureChanged;
+        return {
+          key: o.key,
+          title: `Option ${o.key}`,
+          note: o.note,
+          model: om?.model ?? model,
+          proxyUrl: own ? (o.picture === "ready" && om ? `/media/${pid}/options/${compare.id}/${o.key}/proxy.mp4?v=${om.proxy.version}` : null) : proxyUrl,
+          proxyNote: own && o.picture !== "ready" ? (o.picture === "failed" ? "This option's picture failed to build" : "Building this option's picture…") : own && !om ? "Loading…" : proxyNote,
+          overlayUrl: model.hasOverlay ? `/overlay/${pid}/o/${compare.id}/${o.key}/index.html?at=${overlayAt}` : null,
+        };
+      }),
+    ];
+  }, [model, compare, pid, optModels, proxyUrl, proxyNote, overlayUrl, overlayAt]);
+
+  // the sounds you hear are the listened cell's (or the edit's, outside compare)
+  const listened = cells.find((c) => c.key === listen) ?? cells[0];
+  useEffect(() => {
+    if (!pid || !listened) return;
+    engine.load(listened.model.sfx, (s) => api.fileUrl(pid, s.file)).then(() => {
+      const v = players.current[0]?.video;
+      if (v && !v.paused) engine.schedule(v.currentTime);
+    });
+  }, [listened?.model, pid, engine]);
+  useEffect(() => {
+    if (!compare) setListen("current");
+  }, [compare]);
+
   const online = useSocket((m) => {
-    if (m.type === "comment" && m.comment.project === pid)
-      setComments((cs) => (cs.some((c) => c.id === m.comment.id) ? cs.map((c) => (c.id === m.comment.id ? m.comment : c)) : [...cs, m.comment]));
+    if (m.type === "comment" && m.comment.project === pid) {
+      setComments((cs) => {
+        const prev = cs.find((c) => c.id === m.comment.id);
+        // open the comparison by itself when the options you are looking at are ready
+        if (m.comment.status === "review" && prev?.status !== "review" && focusRef.current === m.comment.id) setCompareId(m.comment.id);
+        return prev ? cs.map((c) => (c.id === m.comment.id ? m.comment : c)) : [...cs, m.comment];
+      });
+    }
     if (m.type === "project" && m.id === pid) {
       setProxy(m.proxy);
       loadModel(pid); // sounds, cuts or b-roll may have changed in the draft
@@ -79,38 +147,48 @@ export default function App() {
     if (m.type === "overlay" && m.id === pid) setOverlayAt(m.at);
   });
 
-  // playback clock: the video drives everything else
+  const leader = () => players.current[0];
+  const all = () => players.current.slice(0, cells.length).filter(Boolean) as StageHandle[];
+
+  // playback clock: the first player's video drives the others, the captions and the sounds
   useEffect(() => {
     let raf = 0;
     const tick = () => {
-      const v = stage.current?.video;
+      const v = leader()?.video;
       if (v) {
-        setTime(v.currentTime);
-        stage.current?.seekOverlay(v.currentTime);
+        const t = v.currentTime;
+        setTime(t);
+        for (const p of all()) {
+          const f = p.video;
+          if (f && f !== v) {
+            if (Math.abs(f.currentTime - t) > 0.12) f.currentTime = t;
+            if (f.paused) f.play().catch(() => {});
+          }
+          p.seekOverlay(t);
+        }
       }
       raf = requestAnimationFrame(tick);
     };
     if (playing) raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [playing]);
+  }, [playing, cells.length]);
 
   const seek = useCallback((t: number) => {
-    const v = stage.current?.video;
-    const d = model?.duration ?? 0;
-    const tt = clamp(t, 0, Math.max(0, d - 0.01));
-    if (v) v.currentTime = tt;
+    const tt = clamp(t, 0, Math.max(0, (model?.duration ?? 0) - 0.01));
+    for (const p of all()) {
+      if (p.video) p.video.currentTime = tt;
+      p.seekOverlay(tt);
+    }
     setTime(tt);
-    stage.current?.seekOverlay(tt);
-  }, [model]);
+  }, [model, cells.length]);
 
   const toggle = useCallback(() => {
-    const v = stage.current?.video;
-    if (!v) return;
-    v.paused ? v.play() : v.pause();
+    const v = leader()?.video;
+    if (v) v.paused ? v.play() : v.pause();
   }, []);
 
-  const onVideoEvent = (e: "play" | "pause" | "seeked" | "loaded") => {
-    const v = stage.current?.video;
+  const leaderEvent = (e: "play" | "pause" | "seeked" | "loaded") => {
+    const v = leader()?.video;
     if (!v) return;
     if (e === "play") {
       setPlaying(true);
@@ -119,15 +197,24 @@ export default function App() {
     if (e === "pause") {
       setPlaying(false);
       engine.stop();
+      for (const p of all()) if (p.video && p.video !== v) p.video.pause();
     }
     if (e === "seeked") {
       if (!v.paused) engine.schedule(v.currentTime);
       setTime(v.currentTime);
-      stage.current?.seekOverlay(v.currentTime);
+      for (const p of all()) p.seekOverlay(v.currentTime);
     }
     if (e === "loaded") {
       v.currentTime = time;
-      stage.current?.seekOverlay(time);
+      leader()?.seekOverlay(time);
+    }
+  };
+  const followerEvent = (i: number) => (e: "play" | "pause" | "seeked" | "loaded") => {
+    const f = players.current[i]?.video;
+    if (e === "loaded" && f) {
+      f.currentTime = leader()?.video?.currentTime ?? time;
+      players.current[i]?.seekOverlay(f.currentTime);
+      if (playing) f.play().catch(() => {});
     }
   };
 
@@ -138,9 +225,11 @@ export default function App() {
       if (e.key === " ") {
         e.preventDefault();
         toggle();
-      } else if (e.key === "c" || e.key === "C") setCommentMode((m) => !m);
-      else if (e.key === "Escape") setCommentMode(false);
-      else if (e.key === "ArrowLeft") seek(time - (e.shiftKey ? 1 : 1 / fps));
+      } else if ((e.key === "c" || e.key === "C") && !compare) setCommentMode((m) => !m);
+      else if (e.key === "Escape") {
+        setCommentMode(false);
+        setCompareId(null);
+      } else if (e.key === "ArrowLeft") seek(time - (e.shiftKey ? 1 : 1 / fps));
       else if (e.key === "ArrowRight") seek(time + (e.shiftKey ? 1 : 1 / fps));
       else if (e.key === "1") setDevice("desktop");
       else if (e.key === "2") setDevice("phone");
@@ -148,9 +237,9 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [toggle, seek, time, model]);
+  }, [toggle, seek, time, model, compare]);
 
-  const submit = async (c: { text: string; t: number; x: number | null; y: number | null; target: Target }) => {
+  const submit = async (c: NewComment) => {
     if (!pid) return;
     const saved = await api.post(pid, c);
     setComments((cs) => (cs.some((x) => x.id === saved.id) ? cs : [...cs, saved]));
@@ -158,14 +247,19 @@ export default function App() {
     setCommentMode(false);
   };
 
-  const proxyUrl = pid && proxy && proxy.version > 0 ? `/media/${pid}/proxy.mp4?v=${proxy.version}` : null;
-  const proxyNote =
-    !proxy ? "Loading…" :
-    proxy.status === "building" ? (proxy.version ? "Updating the picture…" : "Building the preview — about a minute") :
-    proxy.status === "failed" ? `Picture build failed` :
-    proxy.status === "missing" ? "Preparing preview…" : null;
-  const overlayUrl = pid && model?.hasOverlay ? `/overlay/${pid}/index.html?at=${overlayAt}` : null;
+  const pick = async (key: string) => {
+    if (!pid || !compare) return;
+    try {
+      await api.pick(pid, compare.id, key);
+      setCompareId(null);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
   const busy = comments.filter((c) => c.status === "working").length;
+  const cols = cells.length <= 1 ? 1 : cells.length === 2 ? 2 : 2;
+  const rows = Math.ceil(cells.length / cols);
 
   return (
     <div className="flex h-full flex-col">
@@ -187,7 +281,7 @@ export default function App() {
               </option>
             ))}
           </select>
-          {model && <span className="font-mono text-[11px] text-ink-500 tnum">{model.width}×{model.height} · {fmt(model.duration)}</span>}
+          {model && <span className="hidden font-mono text-[11px] text-ink-500 tnum md:inline">{model.width}×{model.height} · {fmt(model.duration)}</span>}
         </div>
 
         <Segmented
@@ -213,26 +307,77 @@ export default function App() {
         </div>
       </header>
 
-      {error && <div className="bg-red-500/10 px-4 py-2 text-[12px] text-red-300">{error}</div>}
+      {error && (
+        <button onClick={() => setError(null)} className="bg-red-500/10 px-4 py-2 text-left text-[12px] text-red-300">
+          {error}
+        </button>
+      )}
 
       <div className="flex min-h-0 flex-1">
         <main className="flex min-w-0 flex-1 flex-col">
+          {compare && (
+            <div className="flex h-10 shrink-0 items-center gap-3 border-b border-white/5 bg-ink-900/60 px-4 text-[12px]">
+              <span className="rounded bg-gold px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-ink-950">Compare</span>
+              <span className="truncate text-ink-200">“{compare.text}”</span>
+              <div className="flex-1" />
+              <button onClick={() => pick("current")} className="rounded-md px-2 py-1 text-ink-300 ring-1 ring-white/10 hover:bg-white/5">
+                Keep current
+              </button>
+              <button onClick={() => setCompareId(null)} className="rounded-md px-2 py-1 text-ink-400 hover:bg-white/5" title="Close (Esc); the options stay on the comment">
+                Close
+              </button>
+            </div>
+          )}
+
           {model ? (
-            <Stage
-              ref={stage}
-              model={model}
-              proxyUrl={proxyUrl}
-              proxyNote={proxyNote}
-              overlayUrl={overlayUrl}
-              device={device}
-              time={time}
-              commentMode={commentMode}
-              comments={comments}
-              focusId={focusId}
-              onFocus={setFocusId}
-              onSubmit={submit}
-              onVideoEvent={onVideoEvent}
-            />
+            <div
+              className={cx("min-h-0 flex-1", compare ? "grid gap-2 p-2" : "flex")}
+              style={compare ? { gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))` } : undefined}
+            >
+              {cells.map((cell, i) => (
+                <div key={cell.key} className={cx("flex min-h-0 min-w-0 flex-1 flex-col", compare && cx("overflow-hidden rounded-xl bg-ink-900/70 ring-1", listen === cell.key ? "ring-gold/40" : "ring-white/5"))}>
+                  {compare && (
+                    <div className="flex h-9 shrink-0 items-center gap-2 px-3">
+                      <span className={cx("grid h-5 min-w-5 place-items-center rounded px-1 text-[10px] font-bold", cell.key === "current" ? "bg-white/10 text-ink-200" : "bg-gold text-ink-950")}>
+                        {cell.key === "current" ? "NOW" : cell.key}
+                      </span>
+                      <span className="truncate text-[12px] text-ink-200" title={cell.note}>{cell.note ?? "Current version"}</span>
+                      <div className="flex-1" />
+                      <button
+                        onClick={() => setListen(cell.key)}
+                        className={cx("rounded-md px-2 py-0.5 text-[11px] ring-1", listen === cell.key ? "text-gold ring-gold/40" : "text-ink-400 ring-white/10 hover:text-ink-200")}
+                        title="Hear this one"
+                      >
+                        {listen === cell.key ? "Listening" : "Listen"}
+                      </button>
+                      {cell.key !== "current" && (
+                        <button onClick={() => pick(cell.key)} className="rounded-md bg-gold px-2 py-0.5 text-[11px] font-semibold text-ink-950 hover:brightness-110">
+                          Use this
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  <Stage
+                    ref={(el) => {
+                      players.current[i] = el;
+                    }}
+                    model={cell.model}
+                    proxyUrl={cell.proxyUrl}
+                    proxyNote={cell.proxyNote}
+                    overlayUrl={cell.overlayUrl}
+                    device={device}
+                    time={time}
+                    commentMode={commentMode && !compare}
+                    comments={compare ? [] : comments}
+                    focusId={focusId}
+                    onFocus={setFocusId}
+                    onSubmit={submit}
+                    muted={compare ? listen !== cell.key : false}
+                    onVideoEvent={i === 0 ? leaderEvent : followerEvent(i)}
+                  />
+                </div>
+              ))}
+            </div>
           ) : (
             <div className="grid flex-1 place-items-center text-[13px] text-ink-400">{error ? "" : "Loading project…"}</div>
           )}
@@ -240,14 +385,14 @@ export default function App() {
           {model && (
             <>
               <div className="flex h-11 shrink-0 items-center gap-3 border-t border-white/5 bg-ink-900 px-4">
-                <button onClick={toggle} className="grid h-7 w-7 place-items-center rounded-full bg-ink-100 text-ink-950 hover:bg-white" title="Play / pause (Space)">
+                <button onClick={toggle} className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-ink-100 text-ink-950 hover:bg-white" title="Play / pause (Space)">
                   {playing ? (
                     <svg width="10" height="12" viewBox="0 0 10 12"><rect width="3" height="12" fill="currentColor" /><rect x="7" width="3" height="12" fill="currentColor" /></svg>
                   ) : (
                     <svg width="11" height="12" viewBox="0 0 11 12" className="ml-0.5"><path d="M0 0L11 6L0 12Z" fill="currentColor" /></svg>
                   )}
                 </button>
-                <span className="font-mono text-[12px] text-ink-200 tnum">
+                <span className="whitespace-nowrap font-mono text-[12px] text-ink-200 tnum">
                   {fmt(time, true, model.fps)} <span className="text-ink-500">/ {fmt(model.duration)}</span>
                 </span>
                 <button
@@ -258,27 +403,29 @@ export default function App() {
                   SFX
                 </button>
                 <div className="flex-1" />
-                <span className="hidden text-[11px] text-ink-500 lg:block">
+                <span className="hidden text-[11px] text-ink-500 xl:block">
                   <Kbd>Space</Kbd> play · <Kbd>←</Kbd><Kbd>→</Kbd> frame · <Kbd>1</Kbd><Kbd>2</Kbd><Kbd>3</Kbd> device
                 </span>
-                <button
-                  onClick={() => setCommentMode(!commentMode)}
-                  className={cx(
-                    "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-semibold transition",
-                    commentMode ? "bg-gold text-ink-950" : "bg-white/5 text-ink-100 ring-1 ring-white/10 hover:bg-white/10",
-                  )}
-                  title="Comment mode (C)"
-                >
-                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M2 3.5A1.5 1.5 0 013.5 2h9A1.5 1.5 0 0114 3.5v6a1.5 1.5 0 01-1.5 1.5H7l-3.5 3v-3h0A1.5 1.5 0 012 9.5v-6z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" /></svg>
-                  {commentMode ? "Click what to change" : "Comment"}
-                  {!commentMode && <span className="font-mono text-[10px] opacity-50">C</span>}
-                </button>
+                {!compare && (
+                  <button
+                    onClick={() => setCommentMode(!commentMode)}
+                    className={cx(
+                      "flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-[12px] font-semibold transition",
+                      commentMode ? "bg-gold text-ink-950" : "bg-white/5 text-ink-100 ring-1 ring-white/10 hover:bg-white/10",
+                    )}
+                    title="Comment mode (C)"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M2 3.5A1.5 1.5 0 013.5 2h9A1.5 1.5 0 0114 3.5v6a1.5 1.5 0 01-1.5 1.5H7l-3.5 3v-3h0A1.5 1.5 0 012 9.5v-6z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" /></svg>
+                    {commentMode ? "Click what to change" : "Comment"}
+                    {!commentMode && <span className="font-mono text-[10px] opacity-50">C</span>}
+                  </button>
+                )}
               </div>
               <Timeline
                 model={model}
                 time={time}
                 comments={comments}
-                commentMode={commentMode}
+                commentMode={commentMode && !compare}
                 onSeek={seek}
                 onSolo={(s) => engine.solo(s)}
                 onSubmit={submit}
@@ -297,6 +444,10 @@ export default function App() {
           onStop={(id) => pid && api.stop(pid, id)}
           onUndo={(id) => pid && api.undo(pid, id).catch((e) => setError(e.message))}
           onSubmit={submit}
+          onCompare={(id) => {
+            setFocusId(id);
+            setCompareId(id);
+          }}
         />
       </div>
     </div>

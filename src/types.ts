@@ -13,7 +13,9 @@ export type Target = { kind: "caption" | "frame" | "sfx" | "cut" | "broll" | "ge
 export type Activity = { at: number; kind: "tool" | "text" | "info" | "error"; text: string };
 export type Comment = {
   id: string; project: string; createdAt: number; text: string; t: number; x: number | null; y: number | null;
-  target: Target; status: "queued" | "working" | "done" | "failed" | "stopped" | "undone";
+  target: Target; status: "queued" | "working" | "review" | "done" | "failed" | "stopped" | "undone";
   activity: Activity[]; reply?: string; changed?: string[]; costUsd?: number; finishedAt?: number;
+  want?: number; options?: Option[]; chosen?: string;
 };
+export type Option = { key: string; note: string; files: string[]; pictureChanged: boolean; picture?: "building" | "ready" | "failed" };
 export type Device = "desktop" | "phone" | "feed";

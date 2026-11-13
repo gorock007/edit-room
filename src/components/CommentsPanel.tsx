@@ -11,7 +11,8 @@ type Props = {
   onSeek: (t: number) => void;
   onStop: (id: string) => void;
   onUndo: (id: string) => void;
-  onSubmit: (c: { text: string; t: number; x: null; y: null; target: Target }) => void;
+  onSubmit: (c: { text: string; t: number; x: null; y: null; target: Target; want: number }) => void;
+  onCompare: (id: string) => void;
 };
 
 export function CommentsPanel(p: Props) {
@@ -24,7 +25,7 @@ export function CommentsPanel(p: Props) {
         <div className="text-[11px] text-ink-400">{working ? `${working} in progress` : `${p.comments.length} total`}</div>
       </div>
       <div className="border-b border-white/5 p-3">
-        <Composer compact target={{ kind: "general", label: "whole video" }} t={p.time} onSubmit={(text) => p.onSubmit({ text, t: p.time, x: null, y: null, target: { kind: "general", label: "the whole video" } })} />
+        <Composer compact target={{ kind: "general", label: "whole video" }} t={p.time} onSubmit={(text, want) => p.onSubmit({ text, t: p.time, x: null, y: null, target: { kind: "general", label: "the whole video" }, want })} />
       </div>
       <div className="flex-1 space-y-2 overflow-y-auto p-3">
         {list.length === 0 && (
@@ -40,7 +41,7 @@ export function CommentsPanel(p: Props) {
   );
 }
 
-function Card({ c, focused, onFocus, onSeek, onStop, onUndo }: { c: Comment; focused: boolean } & Props) {
+function Card({ c, focused, onFocus, onSeek, onStop, onUndo, onCompare }: { c: Comment; focused: boolean } & Props) {
   const ref = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   useEffect(() => {
@@ -74,6 +75,30 @@ function Card({ c, focused, onFocus, onSeek, onStop, onUndo }: { c: Comment; foc
           <div className="mt-2 flex items-center gap-2 text-[12px] text-ink-300">
             <span className={cx("h-1.5 w-1.5 shrink-0 rounded-full", c.status === "working" ? "bg-gold pulse-ring" : "bg-ink-500")} />
             <span className="truncate">{c.status === "queued" ? "Waiting for the previous comment to finish" : latest?.text ?? "Starting…"}</span>
+          </div>
+        )}
+
+        {c.options && c.options.length > 0 && (
+          <div className="mt-2.5 space-y-1">
+            {c.options.map((o) => (
+              <div key={o.key} className={cx("flex items-center gap-2 text-[12px]", c.chosen === o.key ? "text-ink-100" : "text-ink-300")}>
+                <span className={cx("grid h-4 w-4 shrink-0 place-items-center rounded text-[10px] font-bold", c.chosen === o.key ? "bg-gold text-ink-950" : "bg-white/10 text-ink-200")}>{o.key}</span>
+                <span className="truncate">{o.note}</span>
+                {o.picture === "building" && <span className="shrink-0 text-[10px] text-ink-500">picture…</span>}
+              </div>
+            ))}
+            {c.status === "review" && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCompare(c.id);
+                }}
+                className="mt-1.5 w-full rounded-lg bg-gold py-1.5 text-[12px] font-semibold text-ink-950 hover:brightness-110"
+              >
+                Compare side by side
+              </button>
+            )}
+            {c.chosen && <div className="pt-1 text-[11px] text-ink-500">{c.chosen === "current" ? "Kept the current version" : `Using option ${c.chosen}`}</div>}
           </div>
         )}
 
@@ -138,6 +163,7 @@ function StatusBadge({ c }: { c: Comment }) {
   const map: Record<Comment["status"], [string, string]> = {
     queued: ["Queued", "text-ink-400 bg-white/5"],
     working: ["Working", "text-gold bg-gold/10"],
+    review: ["Pick one", "text-ink-950 bg-gold"],
     done: ["Done", "text-sfx bg-sfx/10"],
     failed: ["Failed", "text-red-300 bg-red-400/10"],
     stopped: ["Stopped", "text-ink-400 bg-white/5"],

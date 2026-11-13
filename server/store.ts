@@ -10,7 +10,8 @@ export type Target = {
   detail?: string;
 };
 export type Activity = { at: number; kind: "tool" | "text" | "info" | "error"; text: string };
-export type CommentStatus = "queued" | "working" | "done" | "failed" | "stopped" | "undone";
+export type CommentStatus = "queued" | "working" | "review" | "done" | "failed" | "stopped" | "undone";
+export type Option = { key: string; note: string; files: string[]; pictureChanged: boolean; picture?: "building" | "ready" | "failed" };
 export type Comment = {
   id: string;
   project: string;
@@ -27,6 +28,9 @@ export type Comment = {
   changed?: string[];
   costUsd?: number;
   finishedAt?: number;
+  want?: number; // how many options the user asked for (1 = just do it)
+  options?: Option[];
+  chosen?: string; // the option key used, or "current"
 };
 
 const file = (p: Project) => path.join(p.dataDir, "comments.json");
