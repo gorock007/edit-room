@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 import type { Comment, Device, EditModel, Target } from "../types";
 import { cx } from "../util";
@@ -18,6 +19,10 @@ type Props = {
   onFocus: (id: string) => void;
   onSubmit: (c: { text: string; t: number; x: number | null; y: number | null; target: Target; want: number }) => void;
   muted?: boolean;
+  /** space around the device frame */
+  pad?: number;
+  /** phone-width window: the comment box opens as a sheet at the bottom of the screen */
+  sheet?: boolean;
   onPickDisabled?: boolean;
   onVideoEvent: (e: "play" | "pause" | "seeked" | "loaded") => void;
 };
@@ -61,8 +66,8 @@ export const Stage = forwardRef<StageHandle, Props>(function Stage(p, ref) {
   const W = p.model.width, H = p.model.height;
   const aspect = W / H;
   const portraitVideo = aspect < 1;
-  const pad = 28;
-  const room = { w: Math.max(200, avail.w - pad * 2), h: Math.max(200, avail.h - pad * 2) };
+  const pad = p.pad ?? 28;
+  const room = { w: Math.max(120, avail.w - pad * 2), h: Math.max(80, avail.h - pad * 2) };
 
   // device geometry: the phone body, its screen, and the video box inside the screen
   let body: Box, screen: Box, bezel = 0, radius = 10, videoBox: Box, videoTop = 0;
@@ -186,24 +191,37 @@ export const Stage = forwardRef<StageHandle, Props>(function Stage(p, ref) {
             {draft && (
               <>
                 <span className="pointer-events-none absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-gold ring-4 ring-gold/30" style={{ left: `${draft.x * 100}%`, top: `${draft.y * 100}%` }} />
-                <div
-                  className="absolute z-20"
-                  style={{
-                    left: `clamp(8px, calc(${draft.x * 100}% - 160px), calc(100% - 328px))`,
-                    top: draft.y > 0.55 ? undefined : `calc(${draft.y * 100}% + 14px)`,
-                    bottom: draft.y > 0.55 ? `calc(${(1 - draft.y) * 100}% + 14px)` : undefined,
-                  }}
-                >
-                  <Composer
-                    target={draft.target}
-                    t={draft.t}
-                    onCancel={() => setDraft(null)}
-                    onSubmit={(text, want) => {
-                      p.onSubmit({ text, t: draft.t, x: draft.x, y: draft.y, target: draft.target, want });
-                      setDraft(null);
-                    }}
-                  />
-                </div>
+                {(() => {
+                  const composer = (
+                    <Composer
+                      target={draft.target}
+                      t={draft.t}
+                      wide={p.sheet}
+                      onCancel={() => setDraft(null)}
+                      onSubmit={(text, want) => {
+                        p.onSubmit({ text, t: draft.t, x: draft.x, y: draft.y, target: draft.target, want });
+                        setDraft(null);
+                      }}
+                    />
+                  );
+                  if (p.sheet)
+                    return createPortal(
+                      <div className="fixed inset-x-0 bottom-0 z-50 p-2 pb-[max(8px,env(safe-area-inset-bottom))]">{composer}</div>,
+                      document.body,
+                    );
+                  return (
+                    <div
+                      className="absolute z-20"
+                      style={{
+                        left: `clamp(8px, calc(${draft.x * 100}% - 160px), calc(100% - 328px))`,
+                        top: draft.y > 0.55 ? undefined : `calc(${draft.y * 100}% + 14px)`,
+                        bottom: draft.y > 0.55 ? `calc(${(1 - draft.y) * 100}% + 14px)` : undefined,
+                      }}
+                    >
+                      {composer}
+                    </div>
+                  );
+                })()}
               </>
             )}
           </div>

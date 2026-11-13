@@ -1,12 +1,24 @@
 import { useEffect, useRef, useState } from "react";
 import type { Comment, EditModel, ProjectInfo, ProxyState, Target } from "./types";
 
+/** Fired when the server says this device's session is gone; the app swaps to the login screen. */
+export const LOGIN_EVENT = "room:login";
+
 const j = async <T,>(r: Response): Promise<T> => {
+  if (r.status === 401) window.dispatchEvent(new Event(LOGIN_EVENT));
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? r.statusText);
   return r.json();
 };
 
+const postJson = (url: string, body: unknown) => fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
 export const api = {
+  me: () => fetch("/api/me").then(j<{ remote: boolean; authed: boolean; hasPassword: boolean }>),
+  login: (password: string) => postJson("/api/login", { password }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? r.statusText);
+    return r.json();
+  }),
+  logout: () => fetch("/api/logout", { method: "POST" }),
   projects: () => fetch("/api/projects").then(j<ProjectInfo[]>),
   model: (id: string) => fetch(`/api/projects/${id}/model`).then(j<{ model: EditModel; proxy: ProxyState }>),
   comments: (id: string) => fetch(`/api/projects/${id}/comments`).then(j<Comment[]>),

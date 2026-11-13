@@ -22,7 +22,9 @@
   --color-broll: #ff9f6e;
 }
 
-html, body, #root { height: 100%; }
+html, body { height: 100%; }
+/* dvh: the phone browser bars come and go; the safe-area insets keep the app clear of the notch and home bar */
+#root { height: 100dvh; padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); box-sizing: border-box; }
 body {
   @apply bg-ink-950 text-ink-100 font-sans antialiased;
   font-feature-settings: "cv11", "ss01";

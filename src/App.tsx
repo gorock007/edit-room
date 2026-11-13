@@ -25,7 +25,22 @@ const store = {
 type Cell = { key: string; title: string; note?: string; model: EditModel; proxyUrl: string | null; proxyNote: string | null; overlayUrl: string | null };
 type NewComment = { text: string; t: number; x: number | null; y: number | null; target: Target; want: number };
 
-export default function App() {
+/** True while the window is phone-width. */
+function useNarrow() {
+  const q = "(max-width: 767px)";
+  const [m, setM] = useState(() => window.matchMedia(q).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(q);
+    const on = () => setM(mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  return m;
+}
+
+export default function App({ remote, onLogout }: { remote: boolean; onLogout: () => void }) {
+  const narrow = useNarrow();
+  const [tab, setTab] = useState<"comments" | "timeline">("comments");
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [pid, setPid] = useState<string | null>(store.get("room.project"));
   const [model, setModel] = useState<EditModel | null>(null);
@@ -77,6 +92,13 @@ export default function App() {
   }, [pid, loadModel]);
   useEffect(() => store.set("room.device", device), [device]);
   useEffect(() => engine.setMuted(!sfxOn), [sfxOn, engine]);
+  useEffect(() => {
+    const wake = () => {
+      if (engine.ctx.state === "suspended") engine.ctx.resume();
+    };
+    window.addEventListener("pointerdown", wake);
+    return () => window.removeEventListener("pointerdown", wake);
+  }, [engine]);
 
   const compare = comments.find((c) => c.id === compareId && c.status === "review") ?? null;
 
@@ -258,22 +280,24 @@ export default function App() {
   };
 
   const busy = comments.filter((c) => c.status === "working").length;
-  const cols = cells.length <= 1 ? 1 : cells.length === 2 ? 2 : 2;
+  const cols = narrow || cells.length <= 1 ? 1 : 2;
+  const dev: Device = narrow ? "desktop" : device; // on a real phone the phone is the frame
+  const aspect = model ? `${model.width} / ${model.height}` : "16 / 9";
   const rows = Math.ceil(cells.length / cols);
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex h-12 shrink-0 items-center justify-between border-b border-white/5 bg-ink-900 px-4">
-        <div className="flex items-center gap-3">
+      <header className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-white/5 bg-ink-900 px-3 md:px-4">
+        <div className="flex min-w-0 items-center gap-2 md:gap-3">
           <div className="flex items-center gap-2">
             <div className="grid h-6 w-6 place-items-center rounded-md bg-gold text-[12px] font-black text-ink-950">E</div>
-            <span className="text-[13px] font-semibold tracking-tight">Edit Room</span>
+            <span className="hidden text-[13px] font-semibold tracking-tight sm:inline">Edit Room</span>
           </div>
-          <span className="text-ink-600">/</span>
+          <span className="hidden text-ink-600 sm:inline">/</span>
           <select
             value={pid ?? ""}
             onChange={(e) => setPid(e.target.value)}
-            className="rounded-md bg-transparent py-1 pr-1 text-[13px] font-medium text-ink-100 outline-none hover:bg-white/5"
+            className="min-w-0 rounded-md bg-transparent py-1 pr-1 text-[16px] font-medium text-ink-100 outline-none hover:bg-white/5 md:text-[13px]"
           >
             {projects.map((p) => (
               <option key={p.id} value={p.id} className="bg-ink-900">
@@ -284,6 +308,7 @@ export default function App() {
           {model && <span className="hidden font-mono text-[11px] text-ink-500 tnum md:inline">{model.width}×{model.height} · {fmt(model.duration)}</span>}
         </div>
 
+        <div className="hidden md:block">
         <Segmented
           value={device}
           onChange={setDevice}
@@ -293,17 +318,23 @@ export default function App() {
             ["feed", "In feed", "3"],
           ]}
         />
+        </div>
 
-        <div className="flex items-center gap-3 text-[12px]">
+        <div className="flex shrink-0 items-center gap-2 text-[12px] md:gap-3">
           {proxy?.status === "stale" && (
             <button onClick={() => pid && api.rebuild(pid)} className="rounded-md px-2 py-1 text-gold ring-1 ring-gold/30 hover:bg-gold/10">
-              Picture changed · rebuild
+              {narrow ? "Rebuild" : "Picture changed · rebuild"}
             </button>
           )}
           <span className={cx("flex items-center gap-1.5", busy ? "text-gold" : "text-ink-400")}>
             <span className={cx("h-1.5 w-1.5 rounded-full", busy ? "bg-gold pulse-ring" : online ? "bg-sfx" : "bg-red-400")} />
-            {busy ? `Claude is editing` : online ? "Connected" : "Reconnecting…"}
+            <span className={cx(narrow && !busy && "hidden")}>{busy ? (narrow ? "Editing" : "Claude is editing") : online ? "Connected" : "Reconnecting…"}</span>
           </span>
+          {remote && (
+            <button onClick={onLogout} className="rounded-md px-2 py-1 text-ink-400 hover:bg-white/5 hover:text-ink-200" title="Log this device out">
+              Log out
+            </button>
+          )}
         </div>
       </header>
 
@@ -313,13 +344,12 @@ export default function App() {
         </button>
       )}
 
-      <div className="flex min-h-0 flex-1">
-        <main className="flex min-w-0 flex-1 flex-col">
+      <div className={cx("flex min-h-0 flex-1", narrow && "flex-col overflow-y-auto")}>
+        <main className={cx("flex min-w-0 flex-col", narrow ? (compare ? "" : "sticky top-0 z-30 bg-ink-950") : "flex-1")}>
           {compare && (
-            <div className="flex h-10 shrink-0 items-center gap-3 border-b border-white/5 bg-ink-900/60 px-4 text-[12px]">
+            <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-white/5 bg-ink-900/60 px-3 py-1.5 text-[12px] md:px-4">
               <span className="rounded bg-gold px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-ink-950">Compare</span>
-              <span className="truncate text-ink-200">“{compare.text}”</span>
-              <div className="flex-1" />
+              <span className="min-w-0 flex-1 truncate text-ink-200">“{compare.text}”</span>
               <button onClick={() => pick("current")} className="rounded-md px-2 py-1 text-ink-300 ring-1 ring-white/10 hover:bg-white/5">
                 Keep current
               </button>
@@ -331,8 +361,8 @@ export default function App() {
 
           {model ? (
             <div
-              className={cx("min-h-0 flex-1", compare ? "grid gap-2 p-2" : "flex")}
-              style={compare ? { gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))` } : undefined}
+              className={cx(narrow ? "" : "min-h-0 flex-1", compare ? "grid gap-2 p-2" : "flex")}
+              style={compare ? { gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gridTemplateRows: narrow ? undefined : `repeat(${rows}, minmax(0, 1fr))` } : undefined}
             >
               {cells.map((cell, i) => (
                 <div key={cell.key} className={cx("flex min-h-0 min-w-0 flex-1 flex-col", compare && cx("overflow-hidden rounded-xl bg-ink-900/70 ring-1", listen === cell.key ? "ring-gold/40" : "ring-white/5"))}>
@@ -357,6 +387,7 @@ export default function App() {
                       )}
                     </div>
                   )}
+                  <div className={cx("flex min-h-0 min-w-0", narrow ? "w-full" : "flex-1")} style={narrow ? { aspectRatio: aspect } : undefined}>
                   <Stage
                     ref={(el) => {
                       players.current[i] = el;
@@ -365,7 +396,9 @@ export default function App() {
                     proxyUrl={cell.proxyUrl}
                     proxyNote={cell.proxyNote}
                     overlayUrl={cell.overlayUrl}
-                    device={device}
+                    device={dev}
+                    pad={narrow ? 0 : 28}
+                    sheet={narrow}
                     time={time}
                     commentMode={commentMode && !compare}
                     comments={compare ? [] : comments}
@@ -375,6 +408,7 @@ export default function App() {
                     muted={compare ? listen !== cell.key : false}
                     onVideoEvent={i === 0 ? leaderEvent : followerEvent(i)}
                   />
+                  </div>
                 </div>
               ))}
             </div>
@@ -384,7 +418,7 @@ export default function App() {
 
           {model && (
             <>
-              <div className="flex h-11 shrink-0 items-center gap-3 border-t border-white/5 bg-ink-900 px-4">
+              <div className="flex h-11 shrink-0 items-center gap-3 border-t border-white/5 bg-ink-900 px-3 md:px-4">
                 <button onClick={toggle} className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-ink-100 text-ink-950 hover:bg-white" title="Play / pause (Space)">
                   {playing ? (
                     <svg width="10" height="12" viewBox="0 0 10 12"><rect width="3" height="12" fill="currentColor" /><rect x="7" width="3" height="12" fill="currentColor" /></svg>
@@ -416,11 +450,26 @@ export default function App() {
                     title="Comment mode (C)"
                   >
                     <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M2 3.5A1.5 1.5 0 013.5 2h9A1.5 1.5 0 0114 3.5v6a1.5 1.5 0 01-1.5 1.5H7l-3.5 3v-3h0A1.5 1.5 0 012 9.5v-6z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" /></svg>
-                    {commentMode ? "Click what to change" : "Comment"}
-                    {!commentMode && <span className="font-mono text-[10px] opacity-50">C</span>}
+                    {commentMode ? (narrow ? "Tap the frame" : "Click what to change") : "Comment"}
+                    {!commentMode && !narrow && <span className="font-mono text-[10px] opacity-50">C</span>}
                   </button>
                 )}
               </div>
+              {narrow && (
+                <div className="flex shrink-0 border-t border-white/5 bg-ink-900 px-3">
+                  {(["comments", "timeline"] as const).map((k) => (
+                    <button
+                      key={k}
+                      onClick={() => setTab(k)}
+                      className={cx("-mb-px border-b-2 px-3 py-2.5 text-[13px] font-medium capitalize", tab === k ? "border-gold text-ink-100" : "border-transparent text-ink-400")}
+                    >
+                      {k}
+                      {k === "comments" && comments.length > 0 && <span className="ml-1.5 text-ink-500">{comments.length}</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {(!narrow || tab === "timeline") && (
               <Timeline
                 model={model}
                 time={time}
@@ -431,11 +480,14 @@ export default function App() {
                 onSubmit={submit}
                 onFocus={setFocusId}
               />
+              )}
             </>
           )}
         </main>
 
+        {(!narrow || tab === "comments") && (
         <CommentsPanel
+          full={narrow}
           comments={comments}
           time={time}
           focusId={focusId}
@@ -447,8 +499,10 @@ export default function App() {
           onCompare={(id) => {
             setFocusId(id);
             setCompareId(id);
+            if (narrow) document.querySelector("main")?.scrollIntoView({ block: "start" });
           }}
         />
+        )}
       </div>
     </div>
   );

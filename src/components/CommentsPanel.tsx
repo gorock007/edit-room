@@ -13,13 +13,15 @@ type Props = {
   onUndo: (id: string) => void;
   onSubmit: (c: { text: string; t: number; x: null; y: null; target: Target; want: number }) => void;
   onCompare: (id: string) => void;
+  /** phone layout: full width, scrolls with the page */
+  full?: boolean;
 };
 
 export function CommentsPanel(p: Props) {
   const list = [...p.comments].sort((a, b) => b.createdAt - a.createdAt);
   const working = p.comments.filter((c) => c.status === "working" || c.status === "queued").length;
   return (
-    <aside className="flex w-[320px] xl:w-[380px] shrink-0 flex-col border-l border-white/5 bg-ink-900">
+    <aside className={cx("flex shrink-0 flex-col bg-ink-900", p.full ? "w-full" : "w-[320px] border-l border-white/5 xl:w-[380px]")}>
       <div className="flex h-11 items-center justify-between border-b border-white/5 px-4">
         <div className="text-[13px] font-semibold text-ink-100">Comments</div>
         <div className="text-[11px] text-ink-400">{working ? `${working} in progress` : `${p.comments.length} total`}</div>
@@ -27,10 +29,10 @@ export function CommentsPanel(p: Props) {
       <div className="border-b border-white/5 p-3">
         <Composer compact target={{ kind: "general", label: "whole video" }} t={p.time} onSubmit={(text, want) => p.onSubmit({ text, t: p.time, x: null, y: null, target: { kind: "general", label: "the whole video" }, want })} />
       </div>
-      <div className="flex-1 space-y-2 overflow-y-auto p-3">
+      <div className={cx("space-y-2 p-3", !p.full && "flex-1 overflow-y-auto")}>
         {list.length === 0 && (
           <div className="mt-10 px-6 text-center text-[13px] leading-relaxed text-ink-400">
-            Press <Kbd>C</Kbd> and click anything in the frame or on the timeline to ask for a change. Claude starts on it the moment you send.
+            {p.full ? "Tap Comment, then tap anything in the frame to ask for a change. Claude starts on it the moment you send." : <>Press <Kbd>C</Kbd> and click anything in the frame or on the timeline to ask for a change. Claude starts on it the moment you send.</>}
           </div>
         )}
         {list.map((c) => (

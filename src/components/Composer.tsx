@@ -20,7 +20,7 @@ export function TargetChip({ target, t }: { target: Target; t?: number }) {
   );
 }
 
-export function Composer({ target, t, onSubmit, onCancel, compact }: { target: Target; t: number; onSubmit: (text: string, want: number) => void; onCancel?: () => void; compact?: boolean }) {
+export function Composer({ target, t, onSubmit, onCancel, compact, wide }: { target: Target; t: number; onSubmit: (text: string, want: number) => void; onCancel?: () => void; compact?: boolean; wide?: boolean }) {
   const [text, setText] = useState("");
   const [want, setWant] = useState(1);
   const ta = useRef<HTMLTextAreaElement>(null);
@@ -36,7 +36,7 @@ export function Composer({ target, t, onSubmit, onCancel, compact }: { target: T
   };
   return (
     <div
-      className={cx("w-[320px] rounded-xl bg-ink-850/95 p-2.5 shadow-2xl ring-1 ring-white/10 backdrop-blur", compact && "w-full shadow-none")}
+      className={cx("w-[320px] rounded-xl bg-ink-850/95 p-2.5 shadow-2xl ring-1 ring-white/10 backdrop-blur", compact && "w-full shadow-none", wide && "w-full")}
       onClick={(e) => e.stopPropagation()}
     >
       <div className="mb-2 flex items-center gap-2">
@@ -57,7 +57,7 @@ export function Composer({ target, t, onSubmit, onCancel, compact }: { target: T
         }}
         rows={compact ? 2 : 3}
         placeholder={compact ? "Ask for a change to the whole video…" : "What should change here?"}
-        className="w-full resize-none rounded-lg bg-ink-950/60 px-2.5 py-2 text-[13px] leading-snug text-ink-100 placeholder:text-ink-500 outline-none ring-1 ring-white/5 focus:ring-gold/40"
+        className="w-full resize-none rounded-lg bg-ink-950/60 px-2.5 py-2 text-[16px] md:text-[13px] leading-snug text-ink-100 placeholder:text-ink-500 outline-none ring-1 ring-white/5 focus:ring-gold/40"
       />
       <div className="mt-2 flex items-center justify-between">
         <div className="flex rounded-md bg-ink-950/60 p-0.5 ring-1 ring-white/5" title="Ask for options to compare side by side before anything changes">
