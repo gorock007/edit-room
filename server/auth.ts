@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type http from "node:http";
-import { AUTH_DIR, LOCAL_HOSTS, REQUIRE_LOGIN } from "./config.ts";
+import { AUTH_DIR, LOCAL_HOSTS, PORT, REQUIRE_LOGIN } from "./config.ts";
 
 /**
  * Login for anything that does not come straight from this Mac (the phone over Tailscale).
@@ -70,9 +70,15 @@ export function sessionOk(req: http.IncomingMessage) {
   return !!s && s.expires > Date.now();
 }
 
-/** Through Tailscale serve (or any proxy), or addressed by any name but this Mac's own loopback. */
+const LOOPBACK_PEERS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+
+/**
+ * "This Mac" only when the request reached the local port, from a loopback socket, addressed to a loopback name, with
+ * no proxy headers. The Tailscale port, and anything else, must log in. Headers can only make a request MORE remote.
+ */
 export function isRemote(req: http.IncomingMessage) {
   if (REQUIRE_LOGIN) return true;
+  if (req.socket.localPort !== PORT || !LOOPBACK_PEERS.has(String(req.socket.remoteAddress))) return true;
   const h = req.headers;
   return !LOCAL_HOSTS.has(String(h.host ?? "")) || h["tailscale-user-login"] != null || h["x-forwarded-for"] != null || h["forwarded"] != null;
 }
@@ -90,7 +96,17 @@ export function lockedFor() {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export async function login(pw: string, agent: string): Promise<{ cookie: string } | { error: string; status: number }> {
+type LoginResult = { cookie: string } | { error: string; status: number };
+
+// One attempt at a time: parallel guesses would all pass the lock check before any of them failed.
+let queue: Promise<unknown> = Promise.resolve();
+export function login(pw: string, agent: string): Promise<LoginResult> {
+  const run = queue.then(() => attempt(pw, agent));
+  queue = run.catch(() => {});
+  return run;
+}
+
+async function attempt(pw: string, agent: string): Promise<LoginResult> {
   if (!hasPassword()) return { status: 409, error: "No password yet. On the Mac, run: npm run password" };
   const wait = lockedFor();
   if (wait) return { status: 429, error: `Too many tries. Try again in ${Math.ceil(wait / 60)} min.` };

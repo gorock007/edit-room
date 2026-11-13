@@ -8,7 +8,7 @@
     "start": "NODE_ENV=production tsx server/index.ts",
     "typecheck": "tsc --noEmit",
     "password": "tsx server/password.ts",
-    "phone": "tailscale serve --bg 4310 && tailscale serve status"
+    "phone": "tailscale serve --bg 4320 && tailscale serve status"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.323",

@@ -4,7 +4,7 @@ import http from "node:http";
 import express from "express";
 import { WebSocketServer, WebSocket } from "ws";
 import chokidar, { type FSWatcher } from "chokidar";
-import { ALLOWED_HOSTS, ALLOWED_ORIGINS, HOST, PORT, READ_ROOTS, inside } from "./config.ts";
+import { ALLOWED_HOSTS, ALLOWED_ORIGINS, HOST, PORT, READ_ROOTS, REMOTE_PORT, inside } from "./config.ts";
 import { getProject, listProjects, readModel, type Project } from "./projects.ts";
 import { buildProxy, proxyFile, proxyState } from "./proxy.ts";
 import { enqueue, quiet, stop } from "./agent.ts";
@@ -13,6 +13,8 @@ import { hasPassword, isRemote, login, logout, needsLogin, sessionOk } from "./a
 import { loadComments, newId, restore, saveComments, updateComment, type Comment } from "./store.ts";
 
 const app = express();
+app.set("case sensitive routing", true); // "/API/..." must not reach a route the login gate didn't recognise
+app.set("strict routing", true);
 // Every request must come from the app itself. A comment makes the agent run commands, so a web page in another tab
 // must not be able to post one: the Host check stops DNS rebinding, the Origin check stops cross-site requests.
 const allowed = (req: http.IncomingMessage) => {
@@ -24,6 +26,24 @@ app.use((req, res, next) => (allowed(req) ? next() : res.status(403).send("forbi
 app.use(express.json({ limit: "1mb" }));
 
 // ---- login: needed by anything that is not this Mac (the phone over Tailscale) ----
+// Deny by default: without a session a remote device gets the login endpoints and the app's own built files, nothing else.
+const dist = path.resolve(import.meta.dirname, "../dist");
+const OPEN_API = new Set(["GET /api/me", "POST /api/login", "POST /api/logout"]);
+const isAppFile = (p: string) => {
+  if (p === "/" || p === "/index.html") return true;
+  try {
+    const f = path.resolve(dist, "." + decodeURIComponent(p));
+    return f.startsWith(dist + path.sep) && fs.statSync(f).isFile();
+  } catch {
+    return false;
+  }
+};
+app.use((req, res, next) => {
+  if (!needsLogin(req) || OPEN_API.has(`${req.method} ${req.path}`)) return next();
+  if ((req.method === "GET" || req.method === "HEAD") && isAppFile(req.path)) return next();
+  res.status(401).json({ error: "login required" });
+});
+
 app.get("/api/me", (req, res) => res.json({ remote: isRemote(req), authed: !needsLogin(req), hasPassword: hasPassword() }));
 app.post("/api/login", async (req, res) => {
   if (!isRemote(req)) return res.json({ ok: true });
@@ -32,20 +52,22 @@ app.post("/api/login", async (req, res) => {
   res.setHeader("Set-Cookie", r.cookie).json({ ok: true });
 });
 app.post("/api/logout", (req, res) => res.setHeader("Set-Cookie", logout(req)).json({ ok: true }));
-// The app's own files (the login screen is part of it) load without a session; everything with data needs one.
-const PRIVATE = /^\/(api|media|overlay|ws)(\/|$)/;
-app.use((req, res, next) => (PRIVATE.test(req.path) && needsLogin(req) ? res.status(401).json({ error: "login required" }) : next()));
 
-const server = http.createServer(app);
-const wss = new WebSocketServer({
-  server,
-  path: "/ws",
-  verifyClient: ({ req }: { req: http.IncomingMessage }) => allowed(req) && req.headers.origin != null && (!isRemote(req) || sessionOk(req)),
-});
+// Two listeners on one app: the local port (this Mac; no login) and the remote port (tailscale serve; always login).
+const localServer = http.createServer(app);
+const remoteServer = http.createServer(app);
+const sockets = [localServer, remoteServer].map(
+  (server) =>
+    new WebSocketServer({
+      server,
+      path: "/ws",
+      verifyClient: ({ req }: { req: http.IncomingMessage }) => allowed(req) && req.headers.origin != null && !needsLogin(req),
+    }),
+);
 
 const send = (msg: unknown) => {
   const s = JSON.stringify(msg);
-  for (const c of wss.clients) if (c.readyState === WebSocket.OPEN) c.send(s);
+  for (const wss of sockets) for (const c of wss.clients) if (c.readyState === WebSocket.OPEN) c.send(s);
 };
 const emitComment = (c: Comment) => send({ type: "comment", comment: c });
 const projectChanged = (p: Project) => send({ type: "project", id: p.id, proxy: proxyState(p) });
@@ -254,11 +276,11 @@ app.get("/overlay/:id/{*rest}", withProject((p, req, res) => {
 }));
 
 // the built app (what the phone loads; `npm run dev` keeps it rebuilt)
-const dist = path.resolve(import.meta.dirname, "../dist");
 app.use(express.static(dist, { index: false }));
 app.get("/{*any}", (_req, res) => {
   const index = path.join(dist, "index.html");
   fs.existsSync(index) ? res.set("Cache-Control", "no-cache").sendFile(index) : res.status(404).send("Not built yet: run npm run build");
 });
 
-server.listen(PORT, HOST, () => console.log(`edit room server on http://${HOST}:${PORT}`));
+localServer.listen(PORT, HOST, () => console.log(`edit room server on http://${HOST}:${PORT} (this Mac)`));
+remoteServer.listen(REMOTE_PORT, "127.0.0.1", () => console.log(`login-only port for tailscale serve on http://127.0.0.1:${REMOTE_PORT}`));

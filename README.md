@@ -21,8 +21,10 @@ npm run dev        # server on :4310 + app on http://127.0.0.1:5310 (also keeps 
 
 ## On your phone (Tailscale)
 
-The server only listens on `127.0.0.1`. Other devices reach it through `tailscale serve`, which gives this Mac an
-HTTPS address that only devices in your own tailnet can open (never use `tailscale funnel`, which is public).
+The server only listens on `127.0.0.1`, on two ports: `4310` for this Mac (no login) and `4320`, where every request
+must log in. Other devices reach `4320` through `tailscale serve`, which gives this Mac an HTTPS address that only
+devices in your own tailnet can open. Never point `tailscale serve` at `4310`, and never use `tailscale funnel`
+(public).
 
 1. Install Tailscale on the phone and sign in to the same tailnet as the Mac.
 2. On the Mac, set the password the phone will use: `npm run password`

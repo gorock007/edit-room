@@ -13,6 +13,11 @@ export const PORT = Number(process.env.ROOM_PORT ?? 4310);
 // Other devices (the phone) come in through `tailscale serve`, which forwards to this loopback port, and must log in.
 export const HOST = process.env.ROOM_HOST ?? "127.0.0.1";
 export const PROXY_WIDTH = 960;
+/**
+ * The port other devices come in on (`tailscale serve` forwards here). Every request on it must log in, whatever its
+ * headers say: which port a request arrived on is the only thing that decides "this Mac" vs "another device".
+ */
+export const REMOTE_PORT = Number(process.env.ROOM_REMOTE_PORT ?? 4320);
 
 /** Roots the app may read media from and the agent may write to. */
 // the agent may write only the user's video folders and scratch space; the skill and the app's undo history stay read-only
@@ -42,6 +47,11 @@ export const inside = (p: string, roots: string[]) => {
 export const AUTH_DIR = process.env.ROOM_AUTH_DIR ?? DATA_DIR;
 /** Ask for the password even on this Mac (for testing the login screen). */
 export const REQUIRE_LOGIN = process.env.ROOM_REQUIRE_LOGIN === "1";
+const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
+if (!LOOPBACK.has(HOST) && !REQUIRE_LOGIN) {
+  // the local port skips the login, so it must never be reachable from another machine
+  throw new Error(`ROOM_HOST=${HOST} is not a loopback address; set ROOM_REQUIRE_LOGIN=1 or use tailscale serve to port ${REMOTE_PORT}`);
+}
 
 /** This Mac's Tailscale name (e.g. my-mac.tailnet.ts.net), so the phone's requests pass the Host/Origin checks. */
 function tailscaleName(): string[] {
@@ -58,7 +68,8 @@ function tailscaleName(): string[] {
 export const PUBLIC_HOSTS = tailscaleName();
 
 /** Only the app itself may call the server: blocks DNS rebinding (Host) and other websites (Origin). */
+const loop = (p: number) => [`127.0.0.1:${p}`, `localhost:${p}`, `[::1]:${p}`];
 export const APP_PORTS = [PORT, Number(process.env.ROOM_WEB_PORT ?? 5310)];
-export const LOCAL_HOSTS = new Set(APP_PORTS.flatMap((p) => [`127.0.0.1:${p}`, `localhost:${p}`, `[::1]:${p}`]));
-export const ALLOWED_HOSTS = new Set([...LOCAL_HOSTS, ...PUBLIC_HOSTS, ...PUBLIC_HOSTS.map((h) => `${h}:443`)]);
+export const LOCAL_HOSTS = new Set(APP_PORTS.flatMap(loop));
+export const ALLOWED_HOSTS = new Set([...LOCAL_HOSTS, ...loop(REMOTE_PORT), ...PUBLIC_HOSTS, ...PUBLIC_HOSTS.map((h) => `${h}:443`)]);
 export const ALLOWED_ORIGINS = new Set([...[...LOCAL_HOSTS].map((h) => `http://${h}`), ...PUBLIC_HOSTS.map((h) => `https://${h}`)]);
