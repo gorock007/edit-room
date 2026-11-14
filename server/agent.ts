@@ -39,6 +39,9 @@ How the preview is built, so your change shows up:
 Rules:
 - Do exactly what the comment asks, nothing else. If it is ambiguous, make the most likely call and say which.
 - Keep the user's files safe: change only this project's edit folder, its CapCut draft and your scratch files.
+- Timeline times in the draft are microseconds on a 30 fps grid: every segment start and duration, and the draft
+  duration, must be whole frames (round(n * 1000000 / 30)), and the main track must reach the draft's end exactly.
+  A cut off the grid leaves a sub-frame gap and the preview build fails.
 - Finish with a reply of 1-3 short sentences in plain words: what you changed and where. No markdown headings.
   If you could not do it, say why and what the user can do.
 `.trim();
