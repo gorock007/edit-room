@@ -9,6 +9,7 @@ export const KIND_STYLE: Record<Target["kind"], string> = {
   broll: "bg-broll/15 text-broll ring-broll/30",
   frame: "bg-white/10 text-ink-200 ring-white/15",
   general: "bg-white/10 text-ink-200 ring-white/15",
+  build: "bg-gold/15 text-gold ring-gold/30",
 };
 
 export function TargetChip({ target, t }: { target: Target; t?: number }) {

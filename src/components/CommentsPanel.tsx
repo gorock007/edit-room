@@ -15,6 +15,8 @@ type Props = {
   onCompare: (id: string) => void;
   /** phone layout: full width, scrolls with the page */
   full?: boolean;
+  /** a new edit before its first build: nothing to comment on yet, only the build's progress */
+  noComposer?: boolean;
 };
 
 export function CommentsPanel(p: Props) {
@@ -26,11 +28,11 @@ export function CommentsPanel(p: Props) {
         <div className="text-[13px] font-semibold text-ink-100">Comments</div>
         <div className="text-[11px] text-ink-400">{working ? `${working} in progress` : `${p.comments.length} total`}</div>
       </div>
-      <div className="border-b border-white/5 p-3">
+      {!p.noComposer && <div className="border-b border-white/5 p-3">
         <Composer compact target={{ kind: "general", label: "whole video" }} t={p.time} onSubmit={(text, want) => p.onSubmit({ text, t: p.time, x: null, y: null, target: { kind: "general", label: "the whole video" }, want })} />
-      </div>
+      </div>}
       <div className={cx("space-y-2 p-3", !p.full && "flex-1 overflow-y-auto")}>
-        {list.length === 0 && (
+        {list.length === 0 && !p.noComposer && (
           <div className="mt-10 px-6 text-center text-[13px] leading-relaxed text-ink-400">
             {p.full ? "Tap Comment, then tap anything in the frame to ask for a change. Claude starts on it the moment you send." : <>Press <Kbd>C</Kbd> and click anything in the frame or on the timeline to ask for a change. Claude starts on it the moment you send.</>}
           </div>

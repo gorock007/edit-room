@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import type { Project } from "./projects.ts";
 
 export type Target = {
-  kind: "caption" | "frame" | "sfx" | "cut" | "broll" | "general";
+  kind: "caption" | "frame" | "sfx" | "cut" | "broll" | "general" | "build"; // build = make the first edit from raw/
   id?: string;
   label: string;
   detail?: string;

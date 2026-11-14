@@ -18,6 +18,10 @@ npm run dev        # server on :4310 + app on http://127.0.0.1:5310 (also keeps 
   then they play side by side, in sync, next to the current version; **Use this** applies one, **Keep current** drops
   them.
 - **Devices**: Desktop / Phone / In feed (`1` `2` `3`).
+- **New edit** (`+` in the header): drop the raw camera file, or pick it from Photos/Files on the phone, add an
+  optional note ("starts at …"), and Claude builds the first edit with the talking-head-reel-edit skill. The file goes
+  to `<MMDD> edit/raw/` (today's date; `<MMDD>b` if that name is taken here or in CapCut) in 16 MB pieces, so a
+  dropped connection or a reload resumes: pick the same file again. The phone's screen stays on while it uploads.
 
 ## On your phone (Tailscale)
 

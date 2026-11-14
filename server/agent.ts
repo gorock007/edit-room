@@ -3,11 +3,12 @@ import path from "node:path";
 import { query, tool, createSdkMcpServer, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { CAPCUT_DRAFTS, DATA_DIR, READ_ROOTS, SKILL_DIR, VIDEO_ROOT, WRITE_ROOTS, inside } from "./config.ts";
-import { onScreen, readModel, type Project } from "./projects.ts";
+import { getProject, onScreen, readModel, type Project } from "./projects.ts";
 import { buildProxy, grabFrame, proxyFile, proxyState } from "./proxy.ts";
 import { changedSince, loadComments, restore, snapshot, updateComment, type Activity, type Comment } from "./store.ts";
 import { KEYS, optionProject, saveOption } from "./options.ts";
 import { ALL, coveredBy } from "../src/safezones.ts";
+import { rawDir, rawInfo } from "./uploads.ts";
 
 type Emit = (c: Comment) => void;
 type Hooks = { emit: Emit; projectChanged: (p: Project) => void; overlayChanged: (p: Project) => void };
@@ -83,7 +84,36 @@ function describeTarget(c: Comment, p: Project) {
   return ctx;
 }
 
+/** The first edit of a new project: raw footage only, no CapCut draft yet. */
+function firstEditPrompt(c: Comment, p: Project) {
+  const raw = rawInfo(p);
+  const gb = (n: number) => (n / 1024 ** 3).toFixed(2) + " GB";
+  return `The user uploaded raw footage for a NEW edit from Edit Room and asked you to build the first edit.
+
+Footage (in ${rawDir(p)}):
+${raw.files.map((f) => `- ${f.name} (${gb(f.size)})`).join("\n")}
+
+The user's note: ${raw.note.trim() ? `"${raw.note.trim()}"` : "(none: find the first script line and the end yourself, and drop off-script chatter)"}
+
+Build it end to end with the talking-head-reel-edit skill, in the house style, exactly as you would in a chat with
+the user, with these differences:
+- Nobody is at a prompt. Do not stop to ask; make the call the skill and the user's memory point to, and say in your
+  final reply what you decided (takes chosen, anything you were unsure of).
+- The edit folder is ${p.editDir} (already made, with the footage in raw/). Keep deliverables there as the skill says.
+- There is no CapCut draft yet. Create one named "${p.id}" in the CapCut drafts folder (\`capcut init "${p.id}"\`,
+  --ratio 9:16 if the footage is vertical), then continue from step 0. Write edit-data/build_cfg.json as the skill
+  says: the app finds the draft through its main_src.
+- If the footage is not one talking-head recording (several clips, b-roll only, audio only), build the most sensible
+  edit you can and explain it.
+- Post a short progress note with room_note at the start of each big step (takes found, cut verified, grade, cards,
+  draft built, preview), so the user can follow along on their phone.
+- Do not run the 9:16 version or the 4K master; the user asks for those separately.
+- When the draft is built, call room_refresh_picture so the app's preview is ready.
+Final reply: 2-4 short sentences: what you built, the length, and anything the user should look at first.`;
+}
+
 function buildPrompt(c: Comment, p: Project, framePath: string | null) {
+  if (c.target.kind === "build") return firstEditPrompt(c, p);
   const where = c.x != null ? ` at point (${(c.x * 100).toFixed(0)}% across, ${(c.y! * 100).toFixed(0)}% down)` : "";
   return `New comment from the user on project ${p.name}.
 
@@ -119,7 +149,9 @@ function roomTools(p: Project, c: Comment, hooks: Hooks) {
         {},
         async () => {
           if ((c.want ?? 1) > 1) return { content: [{ type: "text", text: "Not needed in options mode: room_save_option prepares each option's preview." }] };
-          await buildProxy(p, () => hooks.projectChanged(p));
+          const cur = getProject(p.id) ?? p; // a first edit has no draft when the run starts
+          if (!cur.draftDir) return { content: [{ type: "text", text: "No CapCut draft found for this project yet: write edit-data/build_cfg.json (main_src inside the draft's folder) or name the draft after the project id." }], isError: true };
+          await buildProxy(cur, () => hooks.projectChanged(cur));
           return { content: [{ type: "text", text: "Picture proxy rebuilt; the user's preview reloaded." }] };
         },
       ),
@@ -247,7 +279,7 @@ async function runOne(p: Project, commentId: string, hooks: Hooks) {
       set((x) => x.activity.push({ at: Date.now(), kind: "info", text: "Started a fresh agent session" }));
       await attempt(undefined); // the stored session may be gone
     }
-    let changed = changedSince(p, c.id);
+    let changed = c.target.kind === "build" ? [] : changedSince(p, c.id); // a first edit has nothing to undo to
     if (optionsMode && changed.length) {
       restore(p, c.id, changed); // anything not saved as an option is not wanted
       set((x) => x.activity.push({ at: Date.now(), kind: "info", text: "Put back changes that were not saved as an option" }));
@@ -261,7 +293,7 @@ async function runOne(p: Project, commentId: string, hooks: Hooks) {
       x.finishedAt = Date.now();
     });
   } catch (e: any) {
-    let changed = changedSince(p, c.id);
+    let changed = c.target.kind === "build" ? [] : changedSince(p, c.id); // a first edit has nothing to undo to
     if (optionsMode && changed.length) {
       restore(p, c.id, changed);
       changed = [];

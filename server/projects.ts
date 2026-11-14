@@ -37,7 +37,7 @@ export function listProjects(): Project[] {
   if (!fs.existsSync(VIDEO_ROOT)) return [];
   return fs
     .readdirSync(VIDEO_ROOT)
-    .filter((n) => /^\d{3,4} edit$/.test(n))
+    .filter((n) => /^\d{3,4}[a-uw-z]? edit$/.test(n)) // "1114 edit", a second one that day "1114b edit"
     .sort()
     .reverse()
     .flatMap((name) => {

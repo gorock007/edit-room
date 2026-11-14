@@ -8,8 +8,9 @@ export type EditModel = {
   hasOverlay: boolean; pictureHash: string; draftMtime: number;
 };
 export type ProxyState = { status: "missing" | "ready" | "stale" | "building" | "failed"; error?: string; version: number };
-export type ProjectInfo = { id: string; name: string; hasDraft: boolean; hasOverlay: boolean };
-export type Target = { kind: "caption" | "frame" | "sfx" | "cut" | "broll" | "general"; id?: string; label: string; detail?: string };
+export type ProjectInfo = { id: string; name: string; hasDraft: boolean; hasOverlay: boolean; hasRaw: boolean };
+export type RawInfo = { files: { name: string; size: number }[]; pending: { name: string; size: number; received: number }[]; note: string };
+export type Target = { kind: "caption" | "frame" | "sfx" | "cut" | "broll" | "general" | "build"; id?: string; label: string; detail?: string };
 export type Activity = { at: number; kind: "tool" | "text" | "info" | "error"; text: string };
 export type Comment = {
   id: string; project: string; createdAt: number; text: string; t: number; x: number | null; y: number | null;

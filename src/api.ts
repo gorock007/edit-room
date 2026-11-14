@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Comment, EditModel, ProjectInfo, ProxyState, Target } from "./types";
+import type { Comment, EditModel, ProjectInfo, ProxyState, RawInfo, Target } from "./types";
 
 /** Fired when the server says this device's session is gone; the app swaps to the login screen. */
 export const LOGIN_EVENT = "room:login";
@@ -30,6 +30,11 @@ export const api = {
   optionModel: (id: string, cid: string, key: string) => fetch(`/api/projects/${id}/options/${cid}/${key}/model`).then(j<{ model: EditModel; proxy: ProxyState }>),
   pick: (id: string, cid: string, key: string) =>
     fetch(`/api/projects/${id}/comments/${cid}/pick`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key }) }).then(j<Comment>),
+  newEdit: () => fetch("/api/new-edit", { method: "POST" }).then(j<{ id: string }>),
+  raw: (id: string) => fetch(`/api/projects/${id}/raw`).then(j<RawInfo>),
+  startUpload: (id: string, name: string, size: number) =>
+    postJson(`/api/projects/${id}/uploads`, { name, size }).then(j<{ key: string; name: string; size: number; received: number; done: boolean }>),
+  build: (id: string, note: string) => postJson(`/api/projects/${id}/build`, { note }).then(j<Comment>),
   fileUrl: (id: string, path: string) => `/media/${id}/file?p=${encodeURIComponent(path)}`,
 };
 

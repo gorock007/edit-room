@@ -6,6 +6,7 @@ import { clamp, cx, fmt } from "./util";
 import { Stage, type StageHandle } from "./components/Stage";
 import { Timeline } from "./components/Timeline";
 import { CommentsPanel, Kbd } from "./components/CommentsPanel";
+import { NewEdit } from "./components/NewEdit";
 import { SAFE_LABEL, modesFor, type SafeMode } from "./safezones";
 
 const store = {
@@ -29,6 +30,9 @@ const VERTICAL_ASK =
   "\"9:16 version\" section: re-lay out every card and animation with verticalize_card.py and check each one, build " +
   "the 9:16 captions (canvas 1080x1920, below the face, inside the all-apps safe box), then make_vertical.py with the " +
   "framing fixed per take. Leave the 16:9 project untouched. Reply with what you made and anything that still looks off.";
+
+/** The "New edit" page before its folder exists (it is made when the first file is picked). */
+const NEW = "__new";
 
 type NewComment = { text: string; t: number; x: number | null; y: number | null; target: Target; want: number };
 
@@ -82,7 +86,7 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
   useEffect(() => {
     api.projects().then((ps) => {
       setProjects(ps);
-      if (!pid || !ps.some((p) => p.id === pid)) setPid(ps[0]?.id ?? null);
+      if (!pid || !ps.some((p) => p.id === pid)) setPid(ps[0]?.id ?? NEW); // no edits yet: start one
     }).catch((e) => setError(String(e.message)));
   }, []);
 
@@ -93,19 +97,27 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
       setProxy(r.proxy);
       setError(null);
     } catch (e: any) {
-      setError(e.message);
+      if (!/no CapCut draft/.test(e.message)) setError(e.message); // a new edit before its first build
     }
   }, []);
 
+  const info = projects.find((p) => p.id === pid);
+  const draftless = pid === NEW || (!!info && !info.hasDraft);
   useEffect(() => {
     if (!pid) return;
-    store.set("room.project", pid);
     setModel(null);
+    setProxy(null);
     setTime(0);
     setCompareId(null);
-    loadModel(pid);
+    if (pid === NEW) return setComments([]);
+    store.set("room.project", pid);
     api.comments(pid).then(setComments);
-  }, [pid, loadModel]);
+  }, [pid]);
+  // the model needs a draft: a new edit gets one when Claude has built it
+  useEffect(() => {
+    if (pid && pid !== NEW && info?.hasDraft !== false) loadModel(pid);
+  }, [pid, info?.hasDraft, loadModel]);
+  const showNew = draftless && !model;
   useEffect(() => store.set("room.device", device), [device]);
   useEffect(() => engine.setMuted(!sfxOn), [sfxOn, engine]);
   useEffect(() => {
@@ -320,14 +332,26 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
           <select
             value={pid ?? ""}
             onChange={(e) => setPid(e.target.value)}
+            title="Project"
             className="min-w-0 rounded-md bg-transparent py-1 pr-1 text-[16px] font-medium text-ink-100 outline-none hover:bg-white/5 md:text-[13px]"
           >
+            {pid === NEW && <option value={NEW} className="bg-ink-900">New edit</option>}
             {projects.map((p) => (
               <option key={p.id} value={p.id} className="bg-ink-900">
-                {p.name}
+                {p.name}{!p.hasDraft ? " · new" : ""}
               </option>
             ))}
           </select>
+          {pid !== NEW && (
+            <button
+              onClick={() => setPid(NEW)}
+              className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[12px] text-ink-200 ring-1 ring-white/10 hover:bg-white/5"
+              title="Start a new edit from raw footage"
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10"><path d="M5 1v8M1 5h8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
+              <span className={cx(narrow && "hidden")}>New edit</span>
+            </button>
+          )}
           {model && <span className="hidden font-mono text-[11px] text-ink-500 tnum md:inline">{model.width}×{model.height} · {fmt(model.duration)}</span>}
         </div>
 
@@ -381,7 +405,7 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
       )}
 
       <div className={cx("flex min-h-0 flex-1", narrow && "flex-col overflow-y-auto")}>
-        <main className={cx("flex min-w-0 flex-col", narrow ? (compare ? "" : "sticky top-0 z-30 bg-ink-950") : "flex-1")}>
+        <main className={cx("flex min-w-0 flex-col", narrow ? (compare || !model ? "" : "sticky top-0 z-30 bg-ink-950") : "flex-1 overflow-y-auto")}>
           {compare && (
             <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-white/5 bg-ink-900/60 px-3 py-1.5 text-[12px] md:px-4">
               <span className="rounded bg-gold px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-ink-950">Compare</span>
@@ -449,6 +473,18 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
                 </div>
               ))}
             </div>
+          ) : showNew ? (
+            <NewEdit
+              key="new-edit"
+              projectId={pid === NEW ? null : pid}
+              comments={comments}
+              narrow={narrow}
+              onCreated={async (id) => {
+                setProjects(await api.projects());
+                setPid(id);
+              }}
+              onError={setError}
+            />
           ) : (
             <div className="grid flex-1 place-items-center text-[13px] text-ink-400">{error ? "" : "Loading project…"}</div>
           )}
@@ -534,8 +570,9 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
           )}
         </main>
 
-        {(!narrow || tab === "comments") && (
+        {(!narrow || tab === "comments") && pid !== NEW && !(showNew && comments.length === 0) && (
         <CommentsPanel
+          noComposer={showNew}
           full={narrow}
           comments={comments}
           time={time}

@@ -11,6 +11,7 @@ import { enqueue, quiet, stop } from "./agent.ts";
 import { KEYS, applyOption, hasOption, optionProject } from "./options.ts";
 import { hasPassword, isRemote, login, logout, needsLogin, sessionOk } from "./auth.ts";
 import { loadComments, newId, restore, saveComments, updateComment, type Comment } from "./store.ts";
+import { MAX_CHUNK, newEditFolder, putChunk, rawDir, rawInfo, saveNote, startUpload } from "./uploads.ts";
 
 const app = express();
 app.set("case sensitive routing", true); // "/API/..." must not reach a route the login gate didn't recognise
@@ -99,8 +100,68 @@ const withProject = (fn: (p: Project, req: express.Request, res: express.Respons
 };
 
 app.get("/api/projects", (_req, res) => {
-  res.json(listProjects().map((p) => ({ id: p.id, name: p.name, hasDraft: !!p.draftDir, hasOverlay: !!p.overlaysDir })));
+  res.json(listProjects().map((p) => ({ id: p.id, name: p.name, hasDraft: !!p.draftDir, hasOverlay: !!p.overlaysDir, hasRaw: fs.existsSync(rawDir(p)) })));
 });
+
+// ---- new edit: raw footage in from any device, then Claude builds the first cut ----
+app.post("/api/new-edit", (_req, res) => {
+  try {
+    const { id } = newEditFolder();
+    res.json({ id });
+  } catch (e: any) {
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+
+app.get("/api/projects/:id/raw", withProject((p, _req, res) => res.json(rawInfo(p))));
+
+app.post("/api/projects/:id/uploads", withProject((p, req, res) => {
+  if (p.draftDir) return res.status(400).json({ error: "this edit is already built; start a new edit for new footage" });
+  try {
+    res.json(startUpload(p, String(req.body?.name ?? ""), Number(req.body?.size)));
+  } catch (e: any) {
+    res.status(400).json({ error: String(e?.message ?? e) });
+  }
+}));
+
+app.put("/api/projects/:id/uploads/:key", withProject(async (p, req, res) => {
+  const len = Number(req.headers["content-length"]);
+  if (!Number.isFinite(len) || len <= 0 || len > MAX_CHUNK) return res.status(413).json({ error: "chunk too big" });
+  try {
+    res.json(await putChunk(p, String(req.params.key), Number(req.query.offset), req));
+  } catch (e: any) {
+    res.status(e.status ?? 500).json({ error: String(e?.message ?? e), received: e.received });
+  }
+}));
+
+const BUILD_LABEL = "first edit";
+app.post("/api/projects/:id/build", withProject((p, req, res) => {
+  if (p.draftDir) return res.status(400).json({ error: "this edit is already built" });
+  const raw = rawInfo(p);
+  if (!raw.files.length) return res.status(400).json({ error: "upload the footage first" });
+  if (raw.pending.length) return res.status(400).json({ error: "wait for the uploads to finish" });
+  if (loadComments(p).some((c) => c.target.kind === "build" && ["queued", "working"].includes(c.status)))
+    return res.status(409).json({ error: "the first edit is already being built" });
+  const note = String(req.body?.note ?? "").trim();
+  saveNote(p, note);
+  const c: Comment = {
+    id: newId(),
+    project: p.id,
+    createdAt: Date.now(),
+    text: note ? `Build the first edit. ${note}` : "Build the first edit.",
+    t: 0,
+    x: null,
+    y: null,
+    target: { kind: "build", label: BUILD_LABEL, detail: raw.files.map((f) => f.name).join(", ") },
+    status: "queued",
+    activity: [],
+    want: 1,
+  };
+  saveComments(p, [...loadComments(p), c]);
+  emitComment(c);
+  enqueue(p, c.id, hooks);
+  res.json(c);
+}));
 
 app.get("/api/projects/:id/model", withProject((p, _req, res) => {
   watch(p);
@@ -119,6 +180,8 @@ app.get("/api/projects/:id/comments", withProject((p, _req, res) => res.json(loa
 app.post("/api/projects/:id/comments", withProject((p, req, res) => {
   const b = req.body ?? {};
   if (!String(b.text ?? "").trim()) return res.status(400).json({ error: "empty comment" });
+  if (b.target?.kind === "build") return res.status(400).json({ error: "use the build endpoint" });
+  if (!p.draftDir) return res.status(400).json({ error: "this edit isn't built yet: start the edit first" });
   const c: Comment = {
     id: newId(),
     project: p.id,
