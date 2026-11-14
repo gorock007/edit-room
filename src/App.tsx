@@ -24,6 +24,12 @@ const store = {
 };
 
 type Cell = { key: string; title: string; note?: string; model: EditModel; proxyUrl: string | null; proxyNote: string | null; overlayUrl: string | null };
+const VERTICAL_ASK =
+  "Make the 9:16 version of this edit as its own CapCut project. Follow the talking-head-reel-edit skill's " +
+  "\"9:16 version\" section: re-lay out every card and animation with verticalize_card.py and check each one, build " +
+  "the 9:16 captions (canvas 1080x1920, below the face, inside the all-apps safe box), then make_vertical.py with the " +
+  "framing fixed per take. Leave the 16:9 project untouched. Reply with what you made and anything that still looks off.";
+
 type NewComment = { text: string; t: number; x: number | null; y: number | null; target: Target; want: number };
 
 /** True while the window is phone-width. */
@@ -272,6 +278,12 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
     return () => window.removeEventListener("keydown", onKey);
   }, [toggle, seek, time, model, compare, safe]);
 
+  // a finished request can create a project (the 9:16 version): pick it up
+  const doneCount = comments.filter((c) => c.status === "done").length;
+  useEffect(() => {
+    api.projects().then(setProjects).catch(() => {});
+  }, [doneCount]);
+
   const submit = async (c: NewComment) => {
     if (!pid) return;
     const saved = await api.post(pid, c);
@@ -332,6 +344,19 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
         </div>
 
         <div className="flex shrink-0 items-center gap-2 text-[12px] md:gap-3">
+          {model && !portrait && pid && !pid.endsWith("v") && !projects.some((p) => p.id === `${pid}v`) && !compare && (
+            <button
+              onClick={() => {
+                if (!confirm("Make a 9:16 version? Claude builds it as a separate CapCut project: new card layouts, captions and face framing. It takes a while (about 20-40 min) and the 16:9 edit stays as it is.")) return;
+                submit({ text: VERTICAL_ASK, t: 0, x: null, y: null, target: { kind: "general", label: "whole video", detail: "9:16 version" }, want: 1 });
+              }}
+              disabled={comments.some((c) => c.text === VERTICAL_ASK && (c.status === "working" || c.status === "queued"))}
+              className="rounded-md px-2 py-1 text-ink-200 ring-1 ring-white/10 hover:bg-white/5 disabled:opacity-40"
+              title="Build a vertical (9:16) version of this edit as its own project"
+            >
+              {narrow ? "9:16" : "Make 9:16 version"}
+            </button>
+          )}
           {proxy?.status === "stale" && (
             <button onClick={() => pid && api.rebuild(pid)} className="rounded-md px-2 py-1 text-gold ring-1 ring-gold/30 hover:bg-gold/10">
               {narrow ? "Rebuild" : "Picture changed · rebuild"}

@@ -40,18 +40,24 @@ export function listProjects(): Project[] {
     .filter((n) => /^\d{3,4} edit$/.test(n))
     .sort()
     .reverse()
-    .map((name) => {
+    .flatMap((name) => {
       const id = name.split(" ")[0];
       const editDir = path.join(VIDEO_ROOT, name);
-      const overlays = path.join(editDir, "overlays");
-      return {
-        id,
-        name,
-        editDir,
-        draftDir: findDraft(id, editDir),
-        overlaysDir: fs.existsSync(path.join(overlays, "index.html")) ? overlays : null,
-        dataDir: path.join(DATA_DIR, id),
+      const one = (id: string, name: string, dir: string): Project => {
+        const overlays = path.join(dir, "overlays");
+        return {
+          id,
+          name,
+          editDir: dir,
+          draftDir: findDraft(id, dir),
+          overlaysDir: fs.existsSync(path.join(overlays, "index.html")) ? overlays : null,
+          dataDir: path.join(DATA_DIR, id),
+        };
       };
+      // the 9:16 version (make_vertical.py) lives in "<NNNN> edit/vertical" with its own draft, overlays and edit-data
+      const vertical = path.join(editDir, "vertical");
+      const hasVertical = fs.existsSync(path.join(vertical, "edit-data", "build_cfg.json"));
+      return [one(id, name, editDir), ...(hasVertical ? [one(`${id}v`, `${name} · 9:16`, vertical)] : [])];
     });
 }
 
