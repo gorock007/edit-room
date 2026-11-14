@@ -108,6 +108,8 @@ export function readModel(p: Project): EditModel {
   };
   const main = byName("main")?.segments ?? [];
   const broll = byName("B-roll")?.segments ?? [];
+  // "Behind": graphics cut around the speaker (9:16 versions); baked into the proxy picture by preview.py
+  const behind = byName("Behind")?.segments ?? [];
   const sfx: Sfx[] = [];
   for (const t of d.tracks.filter((t: any) => t.type === "audio")) {
     t.segments.forEach((s: any, i: number) => {
@@ -130,6 +132,10 @@ export function readModel(p: Project): EditModel {
     .update(JSON.stringify([main, broll].map((ts) => ts.map((s: any) => [s.material_id, s.target_timerange, s.source_timerange, s.clip?.scale, s.common_keyframes]))))
     .update(JSON.stringify([...vids.values()].map((v) => v.path)))
     .update(extraPicture(d, [main, broll]))
+    .update(behind.map((s: any) => {
+      const f = fixPath(vids.get(s.material_id)?.path ?? "", p.draftDir!);
+      return `${f}|${JSON.stringify(s.target_timerange)}|${fs.existsSync(f) ? fs.statSync(f).mtimeMs : 0}`;
+    }).join(";"))
     .digest("hex")
     .slice(0, 16);
   return {

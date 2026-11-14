@@ -51,7 +51,8 @@ export function buildProxy(p: Project, onChange: () => void): Promise<void> {
     await run("python3", ["-I", path.join(SKILL_DIR, "scripts/preview.py"), p.draftDir!, work, path.join(work, "with_captions.mp4"), String(proxyWidth(model.width, model.height))]);
     const tmp = path.join(p.dataDir, "proxy.tmp.mp4");
     await run("ffmpeg", ["-nostdin", "-v", "error", "-y", "-i", path.join(work, "pic.mp4"), "-i", path.join(work, "aud.wav"),
-      "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-shortest", "-movflags", "+faststart", tmp]);
+      "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-frames:v", String(Math.round(model.duration * 30)),
+      "-movflags", "+faststart", tmp]); // no -shortest: it trimmed the picture to the encoded audio's end, a few frames early
     fs.renameSync(tmp, proxyFile(p));
     const prev = fs.existsSync(meta(p)) ? JSON.parse(fs.readFileSync(meta(p), "utf8")) : { version: 0 };
     fs.writeFileSync(meta(p), JSON.stringify({ hash, builtAt: Date.now(), version: (prev.version ?? 0) + 1 }));
