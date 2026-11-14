@@ -22,6 +22,10 @@ npm run dev        # server on :4310 + app on http://127.0.0.1:5310 (also keeps 
   optional note ("starts at …"), and Claude builds the first edit with the talking-head-reel-edit skill. The file goes
   to `<MMDD> edit/raw/` (today's date; `<MMDD>b` if that name is taken here or in CapCut) in 16 MB pieces, so a
   dropped connection or a reload resumes: pick the same file again. The phone's screen stays on while it uploads.
+- **Export** (header): one upload-ready MP4 for Instagram Reels and TikTok, made straight from the CapCut draft (no
+  CapCut export needed): 1080×1920 (or 1920×1080), 30 fps, H.264 High, AAC 320k, loudness −14 LUFS with true peak under
+  −1 dBTP. It checks the file it wrote (frame count, format, loudness), offers it as a download (on the phone too) and
+  saves a copy next to the edit. The menu lists the app settings that keep the quality when you post.
 
 ## On your phone (Tailscale)
 

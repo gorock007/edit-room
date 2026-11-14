@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Comment, EditModel, ProjectInfo, ProxyState, RawInfo, Target } from "./types";
+import type { Comment, EditModel, ExportState, ProjectInfo, ProxyState, RawInfo, Target } from "./types";
 
 /** Fired when the server says this device's session is gone; the app swaps to the login screen. */
 export const LOGIN_EVENT = "room:login";
@@ -35,13 +35,16 @@ export const api = {
   startUpload: (id: string, name: string, size: number) =>
     postJson(`/api/projects/${id}/uploads`, { name, size }).then(j<{ key: string; name: string; size: number; received: number; done: boolean }>),
   build: (id: string, note: string) => postJson(`/api/projects/${id}/build`, { note }).then(j<Comment>),
+  exportState: (id: string) => fetch(`/api/projects/${id}/export`).then(j<ExportState>),
+  startExport: (id: string) => fetch(`/api/projects/${id}/export`, { method: "POST" }).then(j<ExportState>),
   fileUrl: (id: string, path: string) => `/media/${id}/file?p=${encodeURIComponent(path)}`,
 };
 
 type Msg =
   | { type: "comment"; comment: Comment }
   | { type: "project"; id: string; proxy: ProxyState }
-  | { type: "overlay"; id: string; at: number };
+  | { type: "overlay"; id: string; at: number }
+  | { type: "export"; id: string; export: ExportState };
 
 /** One socket for the whole app; reconnects on its own. */
 export function useSocket(onMsg: (m: Msg) => void) {

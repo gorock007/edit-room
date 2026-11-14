@@ -7,6 +7,11 @@ export type EditModel = {
   cuts: Seg[]; broll: Seg[]; captions: CapGroup[]; sfx: Sfx[];
   hasOverlay: boolean; pictureHash: string; draftMtime: number;
 };
+export type ExportReport = {
+  width: number; height: number; fps: string; frames: number; expected_frames: number; video: string; video_mbps: number;
+  audio: string; size_mb: number; duration: number; lufs: number; true_peak: number;
+};
+export type ExportState = { status: "none" | "running" | "ready" | "stale" | "failed"; stage?: string; error?: string; report?: ExportReport; savedTo?: string; at?: number };
 export type ProxyState = { status: "missing" | "ready" | "stale" | "building" | "failed"; error?: string; version: number };
 export type ProjectInfo = { id: string; name: string; hasDraft: boolean; hasOverlay: boolean; hasRaw: boolean };
 export type RawInfo = { files: { name: string; size: number }[]; pending: { name: string; size: number; received: number }[]; note: string };

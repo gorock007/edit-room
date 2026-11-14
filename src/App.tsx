@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, useSocket } from "./api";
 import { SoundEngine } from "./sound";
-import type { Comment, Device, EditModel, ProjectInfo, ProxyState, Target } from "./types";
+import type { Comment, Device, EditModel, ExportState, ProjectInfo, ProxyState, Target } from "./types";
 import { clamp, cx, fmt } from "./util";
 import { Stage, type StageHandle } from "./components/Stage";
 import { Timeline } from "./components/Timeline";
 import { CommentsPanel, Kbd } from "./components/CommentsPanel";
 import { NewEdit } from "./components/NewEdit";
+import { ExportMenu } from "./components/ExportMenu";
 import { SAFE_LABEL, modesFor, type SafeMode } from "./safezones";
 
 const store = {
@@ -56,6 +57,7 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
   const [pid, setPid] = useState<string | null>(store.get("room.project"));
   const [model, setModel] = useState<EditModel | null>(null);
   const [proxy, setProxy] = useState<ProxyState | null>(null);
+  const [exportSt, setExportSt] = useState<ExportState | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
   const [device, setDevice] = useState<Device>((store.get("room.device") as Device) || "desktop");
   const [commentMode, setCommentMode] = useState(false);
@@ -107,11 +109,13 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
     if (!pid) return;
     setModel(null);
     setProxy(null);
+    setExportSt(null);
     setTime(0);
     setCompareId(null);
     if (pid === NEW) return setComments([]);
     store.set("room.project", pid);
     api.comments(pid).then(setComments);
+    api.exportState(pid).then(setExportSt).catch(() => {});
   }, [pid]);
   // the model needs a draft: a new edit gets one when Claude has built it
   useEffect(() => {
@@ -195,6 +199,7 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
       loadModel(pid); // sounds, cuts or b-roll may have changed in the draft
     }
     if (m.type === "overlay" && m.id === pid) setOverlayAt(m.at);
+    if (m.type === "export" && m.id === pid) setExportSt(m.export);
   });
 
   const leader = () => players.current[0];
@@ -381,6 +386,7 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
               {narrow ? "9:16" : "Make 9:16 version"}
             </button>
           )}
+          {model && pid && pid !== NEW && <ExportMenu pid={pid} state={exportSt} busy={busy > 0} narrow={narrow} />}
           {proxy?.status === "stale" && (
             <button onClick={() => pid && api.rebuild(pid)} className="rounded-md px-2 py-1 text-gold ring-1 ring-gold/30 hover:bg-gold/10">
               {narrow ? "Rebuild" : "Picture changed · rebuild"}

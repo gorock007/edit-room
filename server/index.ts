@@ -7,6 +7,7 @@ import chokidar, { type FSWatcher } from "chokidar";
 import { ALLOWED_HOSTS, ALLOWED_ORIGINS, HOST, PORT, READ_ROOTS, REMOTE_PORT, inside } from "./config.ts";
 import { getProject, listProjects, readModel, type Project } from "./projects.ts";
 import { buildProxy, proxyFile, proxyState } from "./proxy.ts";
+import { exportFile, exportName, exportState, startExport } from "./exporter.ts";
 import { enqueue, quiet, stop } from "./agent.ts";
 import { KEYS, applyOption, hasOption, optionProject } from "./options.ts";
 import { hasPassword, isRemote, login, logout, needsLogin, sessionOk } from "./auth.ts";
@@ -72,6 +73,7 @@ const send = (msg: unknown) => {
 };
 const emitComment = (c: Comment) => send({ type: "comment", comment: c });
 const projectChanged = (p: Project) => send({ type: "project", id: p.id, proxy: proxyState(p) });
+const exportChanged = (p: Project) => send({ type: "export", id: p.id, export: exportState(p) });
 const overlayChanged = (p: Project) => send({ type: "overlay", id: p.id, at: Date.now() });
 const hooks = { emit: emitComment, projectChanged, overlayChanged };
 
@@ -168,6 +170,14 @@ app.get("/api/projects/:id/model", withProject((p, _req, res) => {
   const st = proxyState(p);
   if (st.status === "missing") buildProxy(p, () => projectChanged(p)); // first open: make the preview
   res.json({ model: readModel(p), proxy: proxyState(p) });
+}));
+
+// ---- export for Reels / TikTok ----
+app.get("/api/projects/:id/export", withProject((p, _req, res) => res.json(exportState(p))));
+
+app.post("/api/projects/:id/export", withProject((p, _req, res) => {
+  if (!p.draftDir) return res.status(409).json({ error: "this edit isn't built yet" });
+  res.json(startExport(p, () => exportChanged(p)));
 }));
 
 app.post("/api/projects/:id/proxy", withProject((p, _req, res) => {
@@ -278,6 +288,15 @@ app.post("/api/projects/:id/comments/:cid/pick", withProject((p, req, res) => {
 }));
 
 // ---- media ----
+app.get("/media/:id/export.mp4", withProject((p, req, res) => {
+  if (!fs.existsSync(exportFile(p))) return res.status(404).end();
+  const name = exportName(p);
+  const disp = req.query.download ? "attachment" : "inline";
+  res.sendFile(exportFile(p), {
+    headers: { "Cache-Control": "no-cache", "Content-Disposition": `${disp}; filename="${name.replace(/[^\x20-\x7e]|"/g, "_")}"; filename*=UTF-8''${encodeURIComponent(name)}` },
+  });
+}));
+
 app.get("/media/:id/proxy.mp4", withProject((p, _req, res) => {
   if (!fs.existsSync(proxyFile(p))) return res.status(404).end();
   res.sendFile(proxyFile(p), { headers: { "Cache-Control": "no-cache" } });
