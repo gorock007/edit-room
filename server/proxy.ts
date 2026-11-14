@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { PROXY_WIDTH, SKILL_DIR } from "./config.ts";
+import { SKILL_DIR, proxyWidth } from "./config.ts";
 import { readModel, type Project } from "./projects.ts";
 
 export type ProxyState = { status: "missing" | "ready" | "stale" | "building" | "failed"; builtHash?: string; error?: string; version: number };
@@ -34,7 +34,7 @@ function run(cmd: string, args: string[], cwd?: string) {
 }
 
 /**
- * The proxy is the cut picture (A-roll + cards, no captions) with the cut voice, at 960 px.
+ * The proxy is the cut picture (A-roll + cards, no captions) with the cut voice, 960 px on its long side.
  * Captions and SFX are drawn live by the app, so only picture changes need a rebuild.
  * preview.py does the cutting (it already reproduces the draft frame-exactly).
  */
@@ -43,11 +43,12 @@ export function buildProxy(p: Project, onChange: () => void): Promise<void> {
   if (running) return running;
   errors.delete(p.id);
   const job = (async () => {
-    const hash = readModel(p).pictureHash;
+    const model = readModel(p);
+    const hash = model.pictureHash;
     const work = path.join(p.dataDir, "proxy-work");
     fs.rmSync(work, { recursive: true, force: true });
     fs.mkdirSync(work, { recursive: true });
-    await run("python3", ["-I", path.join(SKILL_DIR, "scripts/preview.py"), p.draftDir!, work, path.join(work, "with_captions.mp4"), String(PROXY_WIDTH)]);
+    await run("python3", ["-I", path.join(SKILL_DIR, "scripts/preview.py"), p.draftDir!, work, path.join(work, "with_captions.mp4"), String(proxyWidth(model.width, model.height))]);
     const tmp = path.join(p.dataDir, "proxy.tmp.mp4");
     await run("ffmpeg", ["-nostdin", "-v", "error", "-y", "-i", path.join(work, "pic.mp4"), "-i", path.join(work, "aud.wav"),
       "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-shortest", "-movflags", "+faststart", tmp]);
@@ -70,10 +71,12 @@ export function buildProxy(p: Project, onChange: () => void): Promise<void> {
 
 /** A still of the picture at t with the commented point marked, for the agent to look at. */
 export async function grabFrame(p: Project, t: number, x: number | null, y: number | null, out: string) {
-  const vf = [`scale=${PROXY_WIDTH}:-2`];
+  const m = readModel(p);
+  const pw = proxyWidth(m.width, m.height);
+  const vf = [`scale=${pw}:-2`];
   if (x != null && y != null) {
     const s = 44;
-    vf.push(`drawbox=x=${Math.round(x * PROXY_WIDTH - s / 2)}:y=ih*${y.toFixed(4)}-${s / 2}:w=${s}:h=${s}:color=red@0.9:t=4`);
+    vf.push(`drawbox=x=${Math.round(x * pw - s / 2)}:y=ih*${y.toFixed(4)}-${s / 2}:w=${s}:h=${s}:color=red@0.9:t=4`);
   }
   await run("ffmpeg", ["-nostdin", "-v", "error", "-y", "-ss", t.toFixed(3), "-i", proxyFile(p), "-frames:v", "1", "-vf", vf.join(","), out]);
 }

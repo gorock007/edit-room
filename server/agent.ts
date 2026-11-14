@@ -7,6 +7,7 @@ import { onScreen, readModel, type Project } from "./projects.ts";
 import { buildProxy, grabFrame, proxyFile, proxyState } from "./proxy.ts";
 import { changedSince, loadComments, restore, snapshot, updateComment, type Activity, type Comment } from "./store.ts";
 import { KEYS, optionProject, saveOption } from "./options.ts";
+import { ALL, coveredBy } from "../src/safezones.ts";
 
 type Emit = (c: Comment) => void;
 type Hooks = { emit: Emit; projectChanged: (p: Project) => void; overlayChanged: (p: Project) => void };
@@ -67,7 +68,12 @@ function describeTarget(c: Comment, p: Project) {
   try {
     const m = readModel(p);
     const s = onScreen(m, c.t);
+    const portrait = m.height > m.width;
+    const under = portrait && c.x != null && c.y != null ? coveredBy(c.x, c.y) : [];
     ctx = [
+      `Frame: ${m.width}x${m.height} (${portrait ? "vertical 9:16 for TikTok/Reels/Shorts" : "16:9"}).` +
+        (portrait ? ` App UI covers roughly the top ${ALL.top}px, bottom ${ALL.bottom}px and right ${ALL.right}px (of 1080x1920); keep captions and key content inside.` : ""),
+      under.length ? `The clicked point is under app UI: ${under.join("; ")}.` : "",
       s.broll ? `On screen: b-roll/card "${s.broll.label}" (${s.broll.start.toFixed(2)}-${(s.broll.start + s.broll.dur).toFixed(2)} s)` : "",
       s.cut ? `A-roll cut ${s.cut.id} (${s.cut.start.toFixed(2)}-${(s.cut.start + s.cut.dur).toFixed(2)} s, source ${s.cut.src.toFixed(2)} s, scale ${s.cut.scale})` : "",
       s.caption ? `Caption group ${s.caption.id} showing: "${s.caption.text}" (keyword "${s.caption.big}")` : "No caption on screen.",

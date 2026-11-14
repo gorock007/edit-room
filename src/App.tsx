@@ -6,6 +6,7 @@ import { clamp, cx, fmt } from "./util";
 import { Stage, type StageHandle } from "./components/Stage";
 import { Timeline } from "./components/Timeline";
 import { CommentsPanel, Kbd } from "./components/CommentsPanel";
+import { SAFE_LABEL, modesFor, type SafeMode } from "./safezones";
 
 const store = {
   get: (k: string) => {
@@ -53,6 +54,15 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
   const [overlayAt, setOverlayAt] = useState(0);
   const [focusId, setFocusId] = useState<string | null>(null);
   const [sfxOn, setSfxOn] = useState(true);
+  const [safePick, setSafePick] = useState<SafeMode>((store.get("room.safe") as SafeMode) || "off");
+  const portrait = !!model && model.height > model.width;
+  const safeModes = modesFor(portrait);
+  // one remembered choice: "on" in one shape stays on when the next project has the other shape
+  const safe: SafeMode = safeModes.includes(safePick) ? safePick : safePick === "off" ? "off" : portrait ? "all" : "title";
+  const setSafe = (m: SafeMode) => {
+    setSafePick(m);
+    store.set("room.safe", m);
+  };
   const [error, setError] = useState<string | null>(null);
   // side-by-side compare of a comment's options
   const [compareId, setCompareId] = useState<string | null>(null);
@@ -256,10 +266,11 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
       else if (e.key === "1") setDevice("desktop");
       else if (e.key === "2") setDevice("phone");
       else if (e.key === "3") setDevice("feed");
+      else if (e.key === "s" || e.key === "S") setSafe(safeModes[(safeModes.indexOf(safe) + 1) % safeModes.length]);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [toggle, seek, time, model, compare]);
+  }, [toggle, seek, time, model, compare, safe]);
 
   const submit = async (c: NewComment) => {
     if (!pid) return;
@@ -387,7 +398,7 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
                       )}
                     </div>
                   )}
-                  <div className={cx("flex min-h-0 min-w-0", narrow ? "w-full" : "flex-1")} style={narrow ? { aspectRatio: aspect } : undefined}>
+                  <div className={cx("flex min-h-0 min-w-0", narrow ? "w-full" : "flex-1")} style={narrow ? { aspectRatio: aspect, maxHeight: portrait ? "62svh" : undefined } : undefined}>
                   <Stage
                     ref={(el) => {
                       players.current[i] = el;
@@ -406,6 +417,7 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
                     onFocus={setFocusId}
                     onSubmit={submit}
                     muted={compare ? listen !== cell.key : false}
+                    safe={safe}
                     onVideoEvent={i === 0 ? leaderEvent : followerEvent(i)}
                   />
                   </div>
@@ -436,9 +448,21 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
                 >
                   SFX
                 </button>
+                <label
+                  className={cx("flex items-center gap-1 rounded-md py-1 pl-2 pr-1 text-[11px] ring-1", safe !== "off" ? "text-gold ring-gold/30" : "text-ink-400 ring-white/10")}
+                  title="Safe zones: where each app's buttons and captions cover the picture (S)"
+                >
+                  <span className={cx(narrow && "hidden")}>Safe</span>
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className={cx(!narrow && "hidden")}><rect x="1" y="1" width="10" height="10" rx="1.5" stroke="currentColor" strokeDasharray="2 1.5" /></svg>
+                  <select value={safe} onChange={(e) => setSafe(e.target.value as SafeMode)} className="bg-transparent text-[16px] outline-none md:text-[11px]">
+                    {safeModes.map((m) => (
+                      <option key={m} value={m} className="bg-ink-900">{SAFE_LABEL[m]}</option>
+                    ))}
+                  </select>
+                </label>
                 <div className="flex-1" />
                 <span className="hidden text-[11px] text-ink-500 xl:block">
-                  <Kbd>Space</Kbd> play · <Kbd>←</Kbd><Kbd>→</Kbd> frame · <Kbd>1</Kbd><Kbd>2</Kbd><Kbd>3</Kbd> device
+                  <Kbd>Space</Kbd> play · <Kbd>←</Kbd><Kbd>→</Kbd> frame · <Kbd>1</Kbd><Kbd>2</Kbd><Kbd>3</Kbd> device · <Kbd>S</Kbd> safe zones
                 </span>
                 {!compare && (
                   <button

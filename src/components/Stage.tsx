@@ -3,6 +3,7 @@ import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, us
 import type { Comment, Device, EditModel, Target } from "../types";
 import { cx } from "../util";
 import { Composer } from "./Composer";
+import { PLATFORMS, fractions, marginsFor, type Platform, type SafeMode } from "../safezones";
 
 export type StageHandle = { video: HTMLVideoElement | null; seekOverlay: (t: number) => void };
 
@@ -19,6 +20,8 @@ type Props = {
   onFocus: (id: string) => void;
   onSubmit: (c: { text: string; t: number; x: number | null; y: number | null; target: Target; want: number }) => void;
   muted?: boolean;
+  /** draw where each app's UI sits (vertical) or title-safe (16:9) */
+  safe?: SafeMode;
   /** space around the device frame */
   pad?: number;
   /** phone-width window: the comment box opens as a sheet at the bottom of the screen */
@@ -171,6 +174,7 @@ export const Stage = forwardRef<StageHandle, Props>(function Stage(p, ref) {
                 </div>
               </div>
             )}
+            {p.safe && p.safe !== "off" && <SafeOverlay mode={p.safe} width={videoBox.w} />}
             {/* click layer: plays/pauses, or in comment mode drops a pin */}
             <div className={cx("absolute inset-0", p.commentMode ? "cursor-crosshair" : "cursor-pointer")} onClick={pick} />
             {pins.map((c) => (
@@ -275,6 +279,47 @@ function FeedChrome({ portrait }: { portrait: boolean }) {
         </div>
         <div className="h-1.5 w-2/3 rounded bg-white/25" />
         <div className="h-1.5 w-1/2 rounded bg-white/15" />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Safe zones over the picture. Vertical: shades where the app's buttons, header and caption block sit, and outlines what
+ * stays clear. 16:9: the classic title-safe (90%) and action-safe (93%) boxes.
+ */
+function SafeOverlay({ mode, width }: { mode: SafeMode; width: number }) {
+  const fs = Math.max(9, Math.min(13, width * 0.026));
+  const pct = (v: number) => `${(v * 100).toFixed(2)}%`;
+  if (mode === "title")
+    return (
+      <div className="pointer-events-none absolute inset-0 z-10">
+        <div className="absolute border border-dashed border-white/35" style={{ inset: "3.5%" }} />
+        <div className="absolute border border-dashed border-gold/80" style={{ inset: "5%" }}>
+          <span className="absolute left-1 top-0.5 font-medium text-gold/90" style={{ fontSize: fs }}>Title safe 90%</span>
+        </div>
+      </div>
+    );
+  const m = marginsFor(mode)!;
+  const f = fractions(m);
+  const plat = mode === "all" ? null : PLATFORMS[mode as Platform];
+  const ui = plat?.ui;
+  const shade = "absolute bg-[repeating-linear-gradient(135deg,rgba(255,80,60,.16)_0_6px,rgba(255,80,60,.05)_6px_12px)]";
+  const tag = (text: string) => (
+    <span className="rounded bg-black/55 px-1.5 py-0.5 font-medium leading-tight text-white/85" style={{ fontSize: fs }}>{text}</span>
+  );
+  return (
+    <div className="pointer-events-none absolute inset-0 z-10">
+      <div className={cx(shade, "inset-x-0 top-0 flex items-start justify-center pt-[1.5%]")} style={{ height: pct(f.top) }}>{tag(ui ? ui.top : "App header")}</div>
+      <div className={cx(shade, "inset-x-0 bottom-0 flex items-end justify-center pb-[1.5%]")} style={{ height: pct(f.bottom) }}>{tag(ui ? ui.bottom : "Caption, handle, sound")}</div>
+      <div className={cx(shade, "right-0 flex items-start justify-center pt-[2%]")} style={{ top: pct(f.top), bottom: pct(f.bottom), width: pct(f.right) }}>
+        <span className="rounded bg-black/55 px-0.5 py-1.5 font-medium text-white/85 [writing-mode:vertical-rl]" style={{ fontSize: fs }}>{ui ? ui.right : "Buttons"}</span>
+      </div>
+      <div className={shade} style={{ top: pct(f.top), bottom: pct(f.bottom), left: 0, width: pct(f.left) }} />
+      <div className="absolute border border-dashed border-gold/90" style={{ top: pct(f.top), bottom: pct(f.bottom), left: pct(f.left), right: pct(f.right) }}>
+        <span className="absolute left-1 top-0.5 font-semibold text-gold" style={{ fontSize: fs }}>
+          {mode === "all" ? "Clear on TikTok, Reels and Shorts" : `Clear on ${plat!.label}`}
+        </span>
       </div>
     </div>
   );

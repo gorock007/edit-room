@@ -12,7 +12,9 @@ export const PORT = Number(process.env.ROOM_PORT ?? 4310);
 // localhost only: anyone who can reach this server can make the agent run commands on this Mac.
 // Other devices (the phone) come in through `tailscale serve`, which forwards to this loopback port, and must log in.
 export const HOST = process.env.ROOM_HOST ?? "127.0.0.1";
+/** Proxy width: 960 for 16:9 (960x540), 540 for 9:16 (540x960), so both cost about the same to build and stream. */
 export const PROXY_WIDTH = 960;
+export const proxyWidth = (w: number, h: number) => (w >= h ? PROXY_WIDTH : Math.round((PROXY_WIDTH * w) / h / 2) * 2);
 /**
  * The port other devices come in on (`tailscale serve` forwards here). Every request on it must log in, whatever its
  * headers say: which port a request arrived on is the only thing that decides "this Mac" vs "another device".

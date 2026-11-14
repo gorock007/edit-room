@@ -123,6 +123,7 @@ export function readModel(p: Project): EditModel {
     .createHash("sha1")
     .update(JSON.stringify([main, broll].map((ts) => ts.map((s: any) => [s.material_id, s.target_timerange, s.source_timerange, s.clip?.scale, s.common_keyframes]))))
     .update(JSON.stringify([...vids.values()].map((v) => v.path)))
+    .update(extraPicture(d, [main, broll]))
     .digest("hex")
     .slice(0, 16);
   return {
@@ -139,6 +140,14 @@ export function readModel(p: Project): EditModel {
     pictureHash,
     draftMtime: fs.statSync(draftFile).mtimeMs,
   };
+}
+
+/** Canvas size and clip positions, hashed only when they differ from a plain 16:9 edit. */
+function extraPicture(d: any, tracks: any[][]) {
+  const c = d.canvas_config ?? {};
+  const canvas = (c.width ?? 1920) !== 1920 || (c.height ?? 1080) !== 1080 ? `canvas ${c.width}x${c.height}` : "";
+  const moved = tracks.flat().map((s: any) => s.clip?.transform).filter((t: any) => t && (t.x || t.y));
+  return canvas + (moved.length ? JSON.stringify(moved) : "");
 }
 
 /** Caption groups straight from the composition HTML (ids g0, g1… are what the agent edits). */
