@@ -18,6 +18,7 @@ const LABEL_W = 92;
 
 export function Timeline(p: Props) {
   const scroller = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(800);
   const [draft, setDraft] = useState<{ t: number; target: Target; left: number; lane: number } | null>(null);
   useLayoutEffect(() => {
@@ -38,9 +39,41 @@ export function Timeline(p: Props) {
     ...tracks.map((t) => ({ key: "sfx:" + t, label: t })),
   ];
 
-  const seekFromEvent = (e: React.MouseEvent) => {
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    p.onSeek(Math.max(0, Math.min(D, (e.clientX - r.left) / pps)));
+  // Scrub: press on the playhead, the ruler or empty lane space and drag; the view scrolls at the edges.
+  const [scrubbing, setScrubbing] = useState(false);
+  const tAt = (clientX: number) => {
+    const r = content.current!.getBoundingClientRect();
+    return Math.max(0, Math.min(D, (clientX - r.left - LABEL_W) / pps));
+  };
+  const startScrub = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    let lastX = e.clientX, frame = 0, edge = 0;
+    p.onSeek(tAt(lastX));
+    setScrubbing(true);
+    const tick = () => {
+      frame = 0;
+      const sc = scroller.current!, r = sc.getBoundingClientRect();
+      edge = lastX > r.right - 28 ? 14 : lastX < r.left + LABEL_W + 28 ? -14 : 0;
+      if (edge) sc.scrollLeft += edge;
+      p.onSeek(tAt(lastX));
+      if (edge) frame = requestAnimationFrame(tick);
+    };
+    const move = (ev: PointerEvent) => {
+      lastX = ev.clientX;
+      if (!frame) frame = requestAnimationFrame(tick);
+    };
+    const up = () => {
+      if (frame) cancelAnimationFrame(frame);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      setScrubbing(false);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   };
 
   const choose = (target: Target, t: number, lane: number, clickT?: number) => {
@@ -54,13 +87,13 @@ export function Timeline(p: Props) {
   const markers = p.comments.filter((c) => c.status !== "undone");
 
   return (
-    <div className="relative select-none border-t border-white/5 bg-ink-900">
+    <div className={cx("relative select-none border-t border-white/5 bg-ink-900", scrubbing && "cursor-ew-resize [&_*]:!cursor-ew-resize")}>
       <div ref={scroller} className="overflow-x-auto overflow-y-hidden">
-        <div className="relative" style={{ width: W + LABEL_W + 16 }}>
+        <div ref={content} className="relative" style={{ width: W + LABEL_W + 16 }}>
           {/* ruler */}
           <div className="sticky top-0 z-10 flex h-7 bg-ink-900">
             <div className="sticky left-0 z-10 bg-ink-900" style={{ width: LABEL_W }} />
-            <div className="relative cursor-text" style={{ width: W }} onMouseDown={seekFromEvent}>
+            <div className="relative cursor-ew-resize touch-none" style={{ width: W }} onPointerDown={startScrub}>
               {ticks.map((t) => (
                 <div key={t} className="absolute top-0 h-full border-l border-white/10" style={{ left: x(t) }}>
                   <span className="ml-1 font-mono text-[10px] text-ink-500 tnum">{fmt(t)}</span>
@@ -70,7 +103,7 @@ export function Timeline(p: Props) {
                 <button
                   key={c.id}
                   title={c.text}
-                  onMouseDown={(e) => e.stopPropagation()}
+                  onPointerDown={(e) => e.stopPropagation()}
                   onClick={() => {
                     p.onSeek(c.t);
                     p.onFocus(c.id);
@@ -90,7 +123,7 @@ export function Timeline(p: Props) {
               <div className="sticky left-0 z-10 flex items-center bg-ink-900 pl-3 text-[11px] font-medium text-ink-400" style={{ width: LABEL_W }}>
                 <span className="truncate">{lane.label}</span>
               </div>
-              <div className="relative" style={{ width: W }} onMouseDown={(e) => e.target === e.currentTarget && seekFromEvent(e)}>
+              <div className="relative" style={{ width: W }} onPointerDown={(e) => e.target === e.currentTarget && startScrub(e)}>
                 {lane.key === "picture" && (
                   <>
                     {p.model.cuts.map((s) => (
@@ -154,7 +187,19 @@ export function Timeline(p: Props) {
 
           {/* playhead */}
           <div className="pointer-events-none absolute top-0 bottom-0 z-20 w-px bg-gold" style={{ left: LABEL_W + x(p.time) }}>
-            <div className="absolute -top-0.5 -left-[5px] h-2.5 w-[11px] rounded-b-sm bg-gold" />
+            {/* grab area: the head plus a 13 px strip along the line */}
+            <div
+              title="Drag to scrub"
+              onPointerDown={startScrub}
+              className="pointer-events-auto absolute top-0 bottom-0 -left-[6px] w-[13px] cursor-ew-resize touch-none"
+            />
+            <div
+              onPointerDown={startScrub}
+              className={cx(
+                "pointer-events-auto absolute -top-0.5 -left-[7px] h-3.5 w-[15px] cursor-ew-resize touch-none rounded-b-sm bg-gold transition-transform hover:scale-110",
+                scrubbing && "scale-110",
+              )}
+            />
           </div>
 
         </div>
