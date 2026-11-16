@@ -276,7 +276,7 @@ export function makeRoom(e: Emitters) {
     // ---- version history ----
 
     /** Newest first. `current` is the version the edit is at now (null if it changed since, e.g. mid-edit). */
-    listVersions(p: Project) {
+    listVersions(p: Project, who: Person | undefined) {
       if (!p.draftDir) return { versions: [], current: null };
       outside(p); // also starts the history on first look
       const list = versions(p);
@@ -284,7 +284,9 @@ export function makeRoom(e: Emitters) {
       const current = last && !agentBusy(p) ? last.n : null;
       // an older version with the very same files as now (e.g. the one just restored) has nothing to compare or restore
       const asNow = (v: Version) => current != null && v.n !== current && same(v.files, last!.files);
-      return { versions: list.map((v) => ({ ...info(v), ...(asNow(v) ? { sameAsNow: true } : {}) })).reverse(), current };
+      // a picked option's note in `what` is the agent's own words, so it can name this Mac's folders: hide them as viewOf does
+      const seen = (v: ReturnType<typeof info>) => (can(who, "editor") ? v : { ...v, what: redact(v.what)!, label: redact(v.label) });
+      return { versions: list.map((v) => ({ ...seen(info(v)), ...(asNow(v) ? { sameAsNow: true } : {}) })).reverse(), current };
     },
 
     nameVersion(p: Project, who: Person, n: number, label: unknown) {

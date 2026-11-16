@@ -430,7 +430,7 @@ const versionOf = (p: Project, req: express.Request) => {
   if (!vp) throw new RoomError(404, "no such version");
   return vp;
 };
-app.get("/api/projects/:id/versions", withProject((p, _req, res) => res.json(room.listVersions(p))));
+app.get("/api/projects/:id/versions", withProject((p, req, res) => res.json(room.listVersions(p, me(req)))));
 app.post("/api/projects/:id/versions/:n/name", withProject((p, req, res) => res.json(room.nameVersion(p, me(req), versionN(req), req.body?.label))));
 app.post("/api/projects/:id/versions/:n/restore", withProject((p, req, res) => res.json(room.restoreVersion(p, me(req), versionN(req)))));
 // a version's timeline and preview: it reuses the current picture when its cuts are the same, else builds its own

@@ -288,7 +288,7 @@ function buildServer(who: Person, d: McpDeps) {
       annotations: { readOnlyHint: true },
     },
     guard(({ project: pid, limit }: { project: string; limit?: number }) => {
-      const r = d.room.listVersions(project(pid));
+      const r = d.room.listVersions(project(pid), who);
       return text({
         current: r.current,
         versions: r.versions.slice(0, limit ?? 30).map((v) => ({
