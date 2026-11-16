@@ -21,7 +21,7 @@ export function TargetChip({ target, t }: { target: Target; t?: number }) {
   );
 }
 
-export function Composer({ target, t, onSubmit, onCancel, compact, wide }: { target: Target; t: number; onSubmit: (text: string, want: number) => void; onCancel?: () => void; compact?: boolean; wide?: boolean }) {
+export function Composer({ target, t, onSubmit, onCancel, onFocus, compact, wide }: { target: Target; t: number; onSubmit: (text: string, want: number) => void; onCancel?: () => void; onFocus?: () => void; compact?: boolean; wide?: boolean }) {
   const [text, setText] = useState("");
   const [want, setWant] = useState(1);
   const ta = useRef<HTMLTextAreaElement>(null);
@@ -48,6 +48,7 @@ export function Composer({ target, t, onSubmit, onCancel, compact, wide }: { tar
         ref={ta}
         value={text}
         onChange={(e) => setText(e.target.value)}
+        onFocus={onFocus}
         onKeyDown={(e) => {
           e.stopPropagation();
           if (e.key === "Enter" && !e.shiftKey) {

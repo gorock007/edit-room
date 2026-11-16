@@ -9,6 +9,7 @@ type Props = {
   comments: Comment[];
   commentMode: boolean;
   onSeek: (t: number) => void;
+  onPause: () => void;
   onSolo: (s: Sfx) => void;
   onSubmit: (c: { text: string; t: number; x: null; y: null; target: Target; want: number }) => void;
   onFocus: (id: string) => void;
@@ -77,9 +78,13 @@ export function Timeline(p: Props) {
   };
 
   const choose = (target: Target, t: number, lane: number, clickT?: number) => {
+    const at = Math.max(0, Math.min(D, clickT ?? t));
     if (p.commentMode) {
-      setDraft({ t, target, left: x(t), lane });
-    } else p.onSeek(clickT ?? t);
+      // the comment sits exactly where you clicked: stop playback and park the playhead there while you type
+      p.onPause();
+      p.onSeek(at);
+      setDraft({ t: at, target, left: x(at), lane });
+    } else p.onSeek(at);
   };
 
   const step = Math.max(1, [1, 2, 5, 10, 15, 30, 60].find((s) => s * pps >= 64) ?? 60);

@@ -567,6 +567,7 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
                 comments={comments}
                 commentMode={commentMode && !compare}
                 onSeek={seek}
+                onPause={() => leader()?.video?.pause()}
                 onSolo={(s) => engine.solo(s)}
                 onSubmit={submit}
                 onFocus={setFocusId}

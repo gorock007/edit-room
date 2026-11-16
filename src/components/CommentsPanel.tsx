@@ -22,6 +22,8 @@ type Props = {
 export function CommentsPanel(p: Props) {
   const list = [...p.comments].sort((a, b) => b.createdAt - a.createdAt);
   const working = p.comments.filter((c) => c.status === "working" || c.status === "queued").length;
+  // the moment you start typing is the comment's time, not the moment you press Send (the video may be playing)
+  const [at, setAt] = useState<number | null>(null);
   return (
     <aside className={cx("flex shrink-0 flex-col bg-ink-900", p.full ? "w-full" : "w-[320px] border-l border-white/5 xl:w-[380px]")}>
       <div className="flex h-11 items-center justify-between border-b border-white/5 px-4">
@@ -29,7 +31,16 @@ export function CommentsPanel(p: Props) {
         <div className="text-[11px] text-ink-400">{working ? `${working} in progress` : `${p.comments.length} total`}</div>
       </div>
       {!p.noComposer && <div className="border-b border-white/5 p-3">
-        <Composer compact target={{ kind: "general", label: "whole video" }} t={p.time} onSubmit={(text, want) => p.onSubmit({ text, t: p.time, x: null, y: null, target: { kind: "general", label: "the whole video" }, want })} />
+        <Composer
+          compact
+          target={{ kind: "general", label: "whole video" }}
+          t={at ?? p.time}
+          onFocus={() => setAt(p.time)}
+          onSubmit={(text, want) => {
+            p.onSubmit({ text, t: at ?? p.time, x: null, y: null, target: { kind: "general", label: "the whole video" }, want });
+            setAt(null);
+          }}
+        />
       </div>}
       <div className={cx("space-y-2 p-3", !p.full && "flex-1 overflow-y-auto")}>
         {list.length === 0 && !p.noComposer && (
