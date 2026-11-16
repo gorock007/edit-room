@@ -87,18 +87,50 @@ export function Timeline(p: Props) {
     } else p.onSeek(at);
   };
 
-  const step = Math.max(1, [1, 2, 5, 10, 15, 30, 60].find((s) => s * pps >= 64) ?? 60);
+  // comment mode, click on empty lane space or the ruler: comment on whatever sits on that lane at that moment
+  const commentAt = (e: React.MouseEvent, li: number) => {
+    if (!p.commentMode || e.target !== e.currentTarget) return;
+    const t = tAt(e.clientX);
+    const key = li < 0 ? "ruler" : lanes[li].key;
+    const inSeg = (s: { start: number; dur: number }) => t >= s.start && t < s.start + s.dur;
+    let target: Target = { kind: "general", label: "this moment", detail: li < 0 ? undefined : `${lanes[li].label} lane` };
+    if (key === "picture") {
+      const b = p.model.broll.find(inSeg), c = p.model.cuts.find(inSeg);
+      if (b) target = { kind: "broll", id: b.id, label: `card "${b.label}"`, detail: `${b.start.toFixed(2)}–${(b.start + b.dur).toFixed(2)} s` };
+      else if (c) target = { kind: "cut", id: c.id, label: `A-roll ${c.id}`, detail: `${c.start.toFixed(2)}–${(c.start + c.dur).toFixed(2)} s${c.scale !== 1 ? ` · punch-in ${c.scale}×` : ""}` };
+    } else if (key === "captions") {
+      const g = p.model.captions.find(inSeg);
+      if (g) target = { kind: "caption", id: g.id, label: `caption ${g.id} "${g.text}"`, detail: g.big ? `keyword "${g.big}"` : undefined };
+    }
+    choose(target, t, Math.max(0, li), t);
+  };
+
+  // keep the playhead in view when it moves by arrow keys or playback (not while you drag it yourself)
+  useLayoutEffect(() => {
+    const sc = scroller.current;
+    if (!sc || scrubbing) return;
+    const px = LABEL_W + x(p.time), left = sc.scrollLeft + LABEL_W + 24, right = sc.scrollLeft + sc.clientWidth - 24;
+    if (px < left) sc.scrollLeft = px - LABEL_W - 24;
+    else if (px > right) sc.scrollLeft = px - sc.clientWidth + 24 + Math.min(120, sc.clientWidth / 4);
+  }, [p.time, pps, scrubbing]);
+
+  const step = Math.max(1,[1, 2, 5, 10, 15, 30, 60].find((s) => s * pps >= 64) ?? 60);
   const ticks = Array.from({ length: Math.floor(D / step) + 1 }, (_, i) => i * step);
   const markers = p.comments.filter((c) => c.status !== "undone");
 
   return (
-    <div className={cx("relative select-none border-t border-white/5 bg-ink-900", scrubbing && "cursor-ew-resize [&_*]:!cursor-ew-resize")}>
+    <div className={cx("relative select-none border-t border-white/5 bg-ink-900", p.commentMode ? "comment-cursor" : scrubbing && "cursor-ew-resize [&_*]:!cursor-ew-resize")}>
       <div ref={scroller} className="overflow-x-auto overflow-y-hidden">
         <div ref={content} className="relative" style={{ width: W + LABEL_W + 16 }}>
           {/* ruler */}
           <div className="sticky top-0 z-10 flex h-7 bg-ink-900">
             <div className="sticky left-0 z-10 bg-ink-900" style={{ width: LABEL_W }} />
-            <div className="relative cursor-ew-resize touch-none" style={{ width: W }} onPointerDown={startScrub}>
+            <div
+              className="relative cursor-ew-resize touch-none"
+              style={{ width: W }}
+              onPointerDown={(e) => !p.commentMode && startScrub(e)}
+              onClick={(e) => commentAt(e, -1)}
+            >
               {ticks.map((t) => (
                 <div key={t} className="absolute top-0 h-full border-l border-white/10" style={{ left: x(t) }}>
                   <span className="ml-1 font-mono text-[10px] text-ink-500 tnum">{fmt(t)}</span>
@@ -109,7 +141,8 @@ export function Timeline(p: Props) {
                   key={c.id}
                   title={c.text}
                   onPointerDown={(e) => e.stopPropagation()}
-                  onClick={() => {
+                  onClick={(e) => {
+                    e.stopPropagation();
                     p.onSeek(c.t);
                     p.onFocus(c.id);
                   }}
@@ -128,7 +161,12 @@ export function Timeline(p: Props) {
               <div className="sticky left-0 z-10 flex items-center bg-ink-900 pl-3 text-[11px] font-medium text-ink-400" style={{ width: LABEL_W }}>
                 <span className="truncate">{lane.label}</span>
               </div>
-              <div className="relative" style={{ width: W }} onPointerDown={(e) => e.target === e.currentTarget && startScrub(e)}>
+              <div
+                className="relative"
+                style={{ width: W }}
+                onPointerDown={(e) => !p.commentMode && e.target === e.currentTarget && startScrub(e)}
+                onClick={(e) => commentAt(e, li)}
+              >
                 {lane.key === "picture" && (
                   <>
                     {p.model.cuts.map((s) => (
@@ -192,16 +230,19 @@ export function Timeline(p: Props) {
 
           {/* playhead */}
           <div className="pointer-events-none absolute top-0 bottom-0 z-20 w-px bg-gold" style={{ left: LABEL_W + x(p.time) }}>
-            {/* grab area: the head plus a 13 px strip along the line */}
+            {/* grab area: the head plus a 13 px strip along the line; in comment mode clicks go straight through to the timeline */}
+            {!p.commentMode && (
+              <div
+                title="Drag to scrub"
+                onPointerDown={startScrub}
+                className="pointer-events-auto absolute top-0 bottom-0 -left-[6px] w-[13px] cursor-ew-resize touch-none"
+              />
+            )}
             <div
-              title="Drag to scrub"
-              onPointerDown={startScrub}
-              className="pointer-events-auto absolute top-0 bottom-0 -left-[6px] w-[13px] cursor-ew-resize touch-none"
-            />
-            <div
-              onPointerDown={startScrub}
+              onPointerDown={p.commentMode ? undefined : startScrub}
               className={cx(
-                "pointer-events-auto absolute -top-0.5 -left-[7px] h-3.5 w-[15px] cursor-ew-resize touch-none rounded-b-sm bg-gold transition-transform hover:scale-110",
+                "absolute -top-0.5 -left-[7px] h-3.5 w-[15px] touch-none rounded-b-sm bg-gold transition-transform",
+                p.commentMode ? "pointer-events-none" : "pointer-events-auto cursor-ew-resize hover:scale-110",
                 scrubbing && "scale-110",
               )}
             />

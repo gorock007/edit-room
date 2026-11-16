@@ -62,6 +62,8 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
   const [device, setDevice] = useState<Device>((store.get("room.device") as Device) || "desktop");
   const [commentMode, setCommentMode] = useState(false);
   const [time, setTime] = useState(0);
+  const timeRef = useRef(0); // latest time, so a held arrow key keeps stepping between renders
+  timeRef.current = time;
   const [playing, setPlaying] = useState(false);
   const [overlayAt, setOverlayAt] = useState(0);
   const [focusId, setFocusId] = useState<string | null>(null);
@@ -284,8 +286,13 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
       else if (e.key === "Escape") {
         setCommentMode(false);
         setCompareId(null);
-      } else if (e.key === "ArrowLeft") seek(time - (e.shiftKey ? 1 : 1 / fps));
-      else if (e.key === "ArrowRight") seek(time + (e.shiftKey ? 1 : 1 / fps));
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        // like CapCut: one frame per press (hold to keep moving), Shift = one second
+        e.preventDefault();
+        const dir = e.key === "ArrowLeft" ? -1 : 1;
+        timeRef.current = clamp(timeRef.current + dir * (e.shiftKey ? 1 : 1 / fps), 0, Math.max(0, (model?.duration ?? 0) - 0.01));
+        seek(timeRef.current);
+      }
       else if (e.key === "1") setDevice("desktop");
       else if (e.key === "2") setDevice("phone");
       else if (e.key === "3") setDevice("feed");
