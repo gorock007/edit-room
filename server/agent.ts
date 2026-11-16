@@ -28,7 +28,8 @@ change one thing.
 How the preview is built, so your change shows up:
 - Captions are the HyperFrames composition <edit>/overlays/index.html, generated from overlays/captions.json (+
   caption_layout.json, broll_spans.json) by \`python3 build_captions.py\` in that folder. The app plays it live and
-  reloads it the moment index.html changes; do NOT re-render captions.mov for the preview.
+  reloads it the moment index.html changes; do NOT re-render captions.mov (Export re-renders it by itself
+  whenever index.html changed since the last render).
 - Sounds, cuts, b-roll and cards live in the CapCut draft (draft_info.json). Change them with the skill's scripts and
   the capcut CLI (load the capcut-edit skill for its contracts). CapCut must be closed for writes: if
   \`pgrep -x CapCut\` finds it running, do not write the draft; reply asking the user to quit CapCut.
