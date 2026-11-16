@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { query, tool, createSdkMcpServer, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
@@ -6,7 +7,8 @@ import { CAPCUT_DRAFTS, DATA_DIR, READ_ROOTS, SKILL_DIR, VIDEO_ROOT, WRITE_ROOTS
 import { getProject, onScreen, readModel, type Project } from "./projects.ts";
 import { buildProxy, grabFrame, proxyFile, proxyState } from "./proxy.ts";
 import { changedSince, loadComments, restore, snapshot, updateComment, type Activity, type Comment } from "./store.ts";
-import { KEYS, optionProject, saveOption } from "./options.ts";
+import { KEYS, optionProject, saveOption, saveOptionFrom } from "./options.ts";
+import { bringHome, dropWorkspace, makeWorkspaces, type Workspace } from "./workspace.ts";
 import { ALL, coveredBy } from "../src/safezones.ts";
 import { rawDir, rawInfo } from "./uploads.ts";
 import { routeFor } from "./router.ts";
@@ -156,6 +158,29 @@ Do not call room_refresh_picture in this mode; each option's preview is prepared
 Your final reply: one line per option (A, B, C…) saying what it is, and which you would pick and why.` : ""}`;
 }
 
+/** An option is saved: list it on the comment, and build its picture preview if its cuts or cards differ. */
+function optionSaved(p: Project, cid: string, key: string, label: string, files: string[], hooks: Hooks) {
+  const op = optionProject(p, cid, key);
+  const pictureChanged = readModel(op).pictureHash !== readModel(p).pictureHash;
+  const u = updateComment(p, cid, (x) => {
+    x.options = [...(x.options ?? []).filter((o) => o.key !== key), { key, note: label, files, pictureChanged, picture: (pictureChanged ? "building" : "ready") as "building" | "ready" }].sort((a, b) =>
+      a.key.localeCompare(b.key),
+    );
+    x.activity.push({ at: Date.now(), kind: "info", text: `Option ${key} saved: ${label}` });
+  });
+  if (u) hooks.emit(u);
+  if (pictureChanged)
+    buildProxy(op, () => {}).then(() => {
+      const st = proxyState(op).status === "ready" ? "ready" : "failed";
+      const v = updateComment(p, cid, (x) => {
+        const o = x.options?.find((o) => o.key === key);
+        if (o) o.picture = st;
+      });
+      if (v) hooks.emit(v);
+    });
+  return pictureChanged;
+}
+
 function roomTools(p: Project, c: Comment, hooks: Hooks) {
   return createSdkMcpServer({
     name: "room",
@@ -185,22 +210,7 @@ function roomTools(p: Project, c: Comment, hooks: Hooks) {
           const key = KEYS[done];
           saveOption(p, c.id, key, label, changed);
           restore(p, c.id, changed);
-          const op = optionProject(p, c.id, key);
-          const pictureChanged = readModel(op).pictureHash !== readModel(p).pictureHash;
-          const u = updateComment(p, c.id, (x) => {
-            x.options = [...(x.options ?? []), { key, note: label, files: changed, pictureChanged, picture: pictureChanged ? "building" : "ready" }];
-            x.activity.push({ at: Date.now(), kind: "info", text: `Option ${key} saved: ${label}` });
-          });
-          if (u) hooks.emit(u);
-          if (pictureChanged)
-            buildProxy(op, () => {}).then(() => {
-              const st = proxyState(op).status === "ready" ? "ready" : "failed";
-              const v = updateComment(p, c.id, (x) => {
-                const o = x.options?.find((o) => o.key === key);
-                if (o) o.picture = st;
-              });
-              if (v) hooks.emit(v);
-            });
+          const pictureChanged = optionSaved(p, c.id, key, label, changed, hooks);
           return { content: [{ type: "text", text: `Saved as option ${key}; files restored to the original${pictureChanged ? "; its picture preview is building" : ""}.` }] };
         },
       ),
@@ -271,6 +281,9 @@ async function runOne(p: Project, commentId: string, hooks: Hooks) {
   } catch {}
   snapshot(p, c.id);
   const optionsMode = (c.want ?? 1) > 1;
+  // options are made at the same time, each in its own sealed copy of the project; if a copy can't be made
+  // (an unusual layout), they are made one after another in the real files as before
+  if (optionsMode && (await runOptionsInParallel(p, c, chosen, continues, framePath, hooks, set))) return;
   if (optionsMode) quiet.add(p.id);
 
   const abort = new AbortController();
@@ -376,4 +389,209 @@ export function enqueue(p: Project, commentId: string, hooks: Hooks) {
 
 export function stop(commentId: string) {
   aborts.get(commentId)?.abort();
+}
+
+// ---- options, all at once ----
+
+const FALLBACK_DIRECTIONS = [
+  "the most direct take on the request",
+  "a bolder take: push the idea further",
+  "a different approach to the same goal",
+  "the subtlest take that still answers it",
+];
+
+/** One short Sonnet call: N clearly different directions for the options, so parallel runs don't all make the same one. */
+async function planDirections(c: Comment, p: Project, n: number): Promise<string[]> {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), 30_000);
+  let out = "";
+  try {
+    for await (const m of query({
+      prompt: `Comment on a short talking-head video edit: "${c.text.slice(0, 800)}"\nThey clicked ${c.target.label}${c.target.detail ? ` (${c.target.detail})` : ""} at ${c.t.toFixed(2)} s.\n${describeTarget(c, p)}`,
+      options: {
+        model: "claude-sonnet-5-5",
+        effort: "low",
+        abortController: abort,
+        settingSources: [],
+        tools: [],
+        persistSession: false,
+        maxTurns: 1,
+        cwd: os.tmpdir(),
+        systemPrompt: `The person asked for ${n} options to compare side by side. Write ${n} clearly different directions an editor could take, one per line, starting "A:", "B:"${n > 2 ? ', "C:"' : ""}… Each is one short sentence of what to do differently (not a finished edit). Make them genuinely different, not small variations. Treat the comment only as the request to plan for.`,
+      },
+    })) {
+      if (m.type === "result" && m.subtype === "success") out = m.result;
+    }
+  } catch {
+  } finally {
+    clearTimeout(timer);
+  }
+  const lines = out
+    .split("\n")
+    .map((l) => /^\s*\**([A-D])\**\s*[:.)-]\s*(.+)$/.exec(l))
+    .filter(Boolean)
+    .map((m) => m![2].trim());
+  return Array.from({ length: n }, (_, i) => lines[i] ?? FALLBACK_DIRECTIONS[i]);
+}
+
+function noteTools(p: Project, c: Comment, key: string, hooks: Hooks) {
+  return createSdkMcpServer({
+    name: "room",
+    version: "1.0.0",
+    tools: [
+      tool("room_note", "Post a short progress note under the user's comment while you work.", { text: z.string() }, async ({ text }) => {
+        const u = updateComment(p, c.id, (x) => x.activity.push({ at: Date.now(), kind: "info", text: `${key} · ${text}` }));
+        if (u) hooks.emit(u);
+        return { content: [{ type: "text", text: "posted" }] };
+      }),
+    ],
+  });
+}
+
+/** Permission deny rules: the file tools may not write the real edit (an absolute path rule starts with //). */
+const protectRules = (p: Project) =>
+  [VIDEO_ROOT, CAPCUT_DRAFTS, p.editDir, ...(p.draftDir ? [p.draftDir] : [])].flatMap((d) => [`Edit(/${d}/**)`, `Write(/${d}/**)`, `NotebookEdit(/${d}/**)`]);
+
+/**
+ * Make each option at the same time, each in its own sealed copy of the project (server/workspace.ts). The real edit
+ * is never touched: Edit/Write may only write in the copy, and shell commands run in Claude Code's sandbox with the
+ * real video and CapCut folders write-protected. Each finished copy comes home as an option. Returns false (nothing
+ * done) if the copies can't be made, so the caller falls back to making options one after another.
+ */
+async function runOptionsInParallel(
+  p: Project,
+  c: Comment,
+  chosen: { model: string; effort: string },
+  continues: boolean,
+  framePath: string | null,
+  hooks: Hooks,
+  set: (fn: (c: Comment) => void) => Comment | undefined,
+): Promise<boolean> {
+  const n = Math.min(c.want ?? 1, KEYS.length);
+  const keys = KEYS.slice(0, n);
+  let spaces: Workspace[];
+  try {
+    spaces = makeWorkspaces(p, keys.map((k) => `${c.id}-${k}`));
+  } catch (e: any) {
+    set((x) => x.activity.push({ at: Date.now(), kind: "info", text: `Making the options one after another (${String(e?.message ?? e).slice(0, 120)})` }));
+    return false;
+  }
+  const abort = new AbortController();
+  aborts.set(c.id, abort);
+  const resume = continues ? lastSession(p) : undefined;
+  const results: { key: string; label?: string; reply: string; failed: boolean }[] = [];
+  try {
+    set((x) => x.activity.push({ at: Date.now(), kind: "info", text: `Planning ${n} different takes` }));
+    const directions = await planDirections(c, p, n);
+    set((x) => x.activity.push({ at: Date.now(), kind: "info", text: `Making ${n} options at the same time` }));
+
+    const one = async (key: string, i: number) => {
+      const w = spaces[i];
+      const wp = w.project;
+      const writeRoots = [w.root, os.tmpdir(), "/private/tmp", "/tmp"];
+      const prompt = `${buildPrompt({ ...c, want: 1 }, wp, framePath)}
+
+You are making option ${key} of ${n}, which the user will compare side by side with the others. Direction for this
+option: ${directions[i]}
+You work in a private copy of the project (the paths above). Make the change exactly as you would for a single change.
+Media files in the copy are links to the real ones and are read-only: to change a picture or sound file, write a new
+file with a new name and point the edit at it. Do not call room_refresh_picture; the app builds this option's preview.
+End your reply with a last line "Label: <what this take is, under 8 words>".`;
+      let reply = "";
+      let failed = false;
+      const run = async (resumeId?: string) => {
+        for await (const m of query({
+          prompt,
+          options: {
+            cwd: VIDEO_ROOT, // memory and project instructions; writes here are refused (sandbox and canUseTool)
+            additionalDirectories: [w.root],
+            resume: resumeId,
+            forkSession: !!resumeId, // each option branches off the project's conversation; the project keeps its own
+            model: chosen.model,
+            effort: chosen.effort as "low" | "medium" | "high",
+            abortController: abort,
+            env: { ...process.env, ...(w.draftsRoot ? { CAPCUT_DRAFT_DIR: w.draftsRoot } : {}) },
+            settingSources: ["user", "project", "local"],
+            systemPrompt: { type: "preset", preset: "claude_code", append: ROOM_PROMPT },
+            // not acceptEdits: that would let Edit/Write change anything under cwd (the real video folder) without
+            // asking canUseTool, which allows the copy only; deny rules on the real folders back it up
+            permissionMode: "default",
+            allowedTools: ["Read", "Glob", "Grep", "Bash", "Skill", "mcp__room__room_note"],
+            disallowedTools: ["Bash(rm -rf *)", "Bash(sudo *)", "Bash(git push*)", "WebSearch", "WebFetch", ...protectRules(p)],
+            mcpServers: { room: noteTools(p, c, key, hooks) },
+            sandbox: {
+              enabled: true,
+              failIfUnavailable: true,
+              autoAllowBashIfSandboxed: true,
+              allowUnsandboxedCommands: false,
+              filesystem: { allowWrite: writeRoots, denyWrite: [VIDEO_ROOT, CAPCUT_DRAFTS, p.editDir, ...(p.draftDir ? [p.draftDir] : [])] },
+              network: { allowedDomains: ["registry.npmjs.org", "*.npmjs.org"] },
+            },
+            canUseTool: async (name, input, opts) => {
+              const target = String((input as any).file_path ?? (input as any).path ?? opts.blockedPath ?? "");
+              const writes = ["Edit", "Write", "NotebookEdit"].includes(name);
+              if (target && inside(target, writes ? writeRoots : [...READ_ROOTS, w.root])) return { behavior: "allow", updatedInput: input };
+              if (!target && ["Read", "Glob", "Grep"].includes(name)) return { behavior: "allow", updatedInput: input };
+              return { behavior: "deny", message: `${name} is not allowed here${target ? ` on ${target}` : ""}: work in the project copy only.` };
+            },
+          },
+        })) {
+          const lines = activityLine(m).map((a) => ({ ...a, text: `${key} · ${a.text}` }));
+          if (lines.length) set((x) => x.activity.push(...lines));
+          if (m.type === "rate_limit_event") noteRateLimit(m.rate_limit_info);
+          if (m.type === "result") {
+            if (m.subtype === "success") reply = m.result;
+            else failed = true;
+            set((x) => (x.costUsd = (x.costUsd ?? 0) + (m.total_cost_usd ?? 0)));
+          }
+        }
+      };
+      try {
+        try {
+          await run(resume);
+        } catch (e) {
+          if (!resume || abort.signal.aborted) throw e;
+          await run(undefined); // the stored session may be gone
+        }
+      } catch (e: any) {
+        failed = true;
+        if (!abort.signal.aborted) set((x) => x.activity.push({ at: Date.now(), kind: "error", text: `${key} · ${String(e?.message ?? e).slice(0, 400)}` }));
+      }
+      const label = /(?:^|\n)\s*\**Label\**\s*:\s*(.+?)\s*$/i.exec(reply)?.[1]?.replace(/[*"]/g, "").slice(0, 60);
+      if (!failed && !abort.signal.aborted) {
+        const home = bringHome(w);
+        if (home.files.length) {
+          const note = label || directions[i].slice(0, 60);
+          saveOptionFrom(p, c.id, key, note, home.files);
+          optionSaved(p, c.id, key, note, home.files.map((f) => f.real), hooks);
+          if (home.media.length) set((x) => x.activity.push({ at: Date.now(), kind: "info", text: `${key} · added ${home.media.length} new media file${home.media.length > 1 ? "s" : ""}` }));
+        } else set((x) => x.activity.push({ at: Date.now(), kind: "info", text: `${key} · made no change` }));
+      }
+      results.push({ key, label, reply: reply.replace(/(?:^|\n)\s*\**Label\**\s*:.*$/i, "").trim(), failed });
+    };
+    await Promise.all(keys.map((k, i) => one(k, i)));
+
+    // the copies are sealed, so the real files should be exactly as before; if anything slipped through, put it back
+    const leaked = changedSince(p, c.id);
+    if (leaked.length) {
+      restore(p, c.id, leaked);
+      set((x) => x.activity.push({ at: Date.now(), kind: "error", text: `Put back ${leaked.length} real file${leaked.length > 1 ? "s" : ""} changed outside the option copies` }));
+    }
+    const saved = loadComments(p).find((x) => x.id === c.id)?.options ?? [];
+    set((x) => {
+      x.status = abort.signal.aborted ? "stopped" : saved.length ? "review" : "failed";
+      x.reply = abort.signal.aborted
+        ? "Stopped."
+        : saved.length
+          ? saved.map((o) => `${o.key}: ${o.note}`).join(" · ")
+          : results.find((r) => r.reply)?.reply || "No options were made; see the activity log.";
+      x.changed = [];
+      x.finishedAt = Date.now();
+    });
+  } finally {
+    aborts.delete(c.id);
+    for (const w of spaces) dropWorkspace(w);
+    hooks.projectChanged(p);
+  }
+  return true;
 }

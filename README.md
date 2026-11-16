@@ -14,9 +14,15 @@ npm run dev        # server on :4310 + app on http://127.0.0.1:5310 (also keeps 
 - **Comments**: press `C`, click a caption word, a spot in the frame, or anything on the timeline. The comment goes to
   a Claude Agent SDK session (your Claude login, your skills and memory) the moment you send it. Comments on one
   project run one at a time; each shows live steps, Claude's reply, and **Undo** (restores every file it changed).
-- **Options**: pick "2 options" or "3 options" in the comment box. Claude makes each take without touching the edit,
-  then they play side by side, in sync, next to the current version; **Use this** applies one, **Keep current** drops
-  them.
+- **Options**: pick "2 options" or "3 options" in the comment box. A short Sonnet call plans clearly different takes,
+  then Claude makes them **all at once**, each in its own sealed copy of the project (`server/workspace.ts`): the edit
+  folder and draft mirrored under `data/<project>/work/`, text files copied with their full paths rewritten to the
+  copy's, media linked. The real edit can't change meanwhile: Edit/Write may only write in the copy (plus deny rules
+  on the real folders), and shell commands run in Claude Code's sandbox with the real video and CapCut folders
+  write-protected (a linked media file is read-only; new media gets a new name and comes home with the option). Each
+  finished copy comes back as an option, paths rewritten to the real ones; then they play side by side, in sync, next
+  to the current version; **Use this** applies one, **Keep current** drops them. If a copy can't be made, options are
+  made one after another as before.
 - **Models**: each comment runs on the model it needs (`server/router.ts`). Small fixes to one thing (a caption's
   colour, a sound's volume, nudging a cut) run on Sonnet 5.5 at low effort in a fresh session; normal edits and options
   on Opus 5.5 at medium; the hook, pacing, story or anything new on Opus 5.5 at high. Rules decide most comments; one

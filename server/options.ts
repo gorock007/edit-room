@@ -28,6 +28,20 @@ export function saveOption(p: Project, cid: string, key: string, note: string, c
   fs.writeFileSync(path.join(dir, "option.json"), JSON.stringify({ key, note, index } satisfies Saved));
 }
 
+/** Save an option made in a working copy: each file's content as it would be at its real path. */
+export function saveOptionFrom(p: Project, cid: string, key: string, note: string, files: { real: string; content: Buffer }[]) {
+  const dir = optDir(p, cid, key);
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(path.join(dir, "files"), { recursive: true });
+  const index: Record<string, string> = {};
+  files.forEach(({ real, content }, i) => {
+    const copy = path.join(dir, "files", `${i}_${path.basename(real)}`);
+    fs.writeFileSync(copy, content);
+    index[real] = copy;
+  });
+  fs.writeFileSync(path.join(dir, "option.json"), JSON.stringify({ key, note, index } satisfies Saved));
+}
+
 const saved = (p: Project, cid: string, key: string): Saved => JSON.parse(fs.readFileSync(path.join(optDir(p, cid, key), "option.json"), "utf8"));
 
 export function hasOption(p: Project, cid: string, key: string) {
