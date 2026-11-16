@@ -21,6 +21,8 @@ export type Activity = { at: number; kind: "tool" | "text" | "info" | "error"; t
 export type Role = "owner" | "editor" | "commenter" | "viewer";
 export const ROLES: Role[] = ["viewer", "commenter", "editor", "owner"];
 export const can = (p: { role: Role } | null | undefined, role: Role) => !!p && ROLES.indexOf(p.role) >= ROLES.indexOf(role);
+/** Starts Claude without review, and approves others: an editor with every project (the server checks the same). */
+export const runsDirectly = (p: { role: Role; projects?: "all" | string[] } | null | undefined) => can(p, "editor") && p?.projects === "all";
 /** A person in the room (me, or someone else). */
 export type Person = { id: string; name: string; role: Role; color: string; projects?: "all" | string[] };
 export type PersonFull = Person & { projects: "all" | string[]; createdAt: number };

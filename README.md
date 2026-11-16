@@ -52,8 +52,12 @@ minutes. `npm run password` again signs your own devices out. Turn sharing off w
   once, for 7 days; they open it, type their name, and stay in on that device for 30 days.
 - **Viewer** watches and follows the comments. **Commenter** comments too, but each comment waits as *Needs approval*
   until an editor approves it (the agent runs commands on this Mac, so someone trusted reads every request first).
-  **Editor** works like you: comments run right away, approves others, picks options, undoes, exports. Only people
-  with all projects can start a new edit. The owner (this Mac, or your password) does everything.
+  **Editor** works like you: comments run right away, approves others, picks options, undoes, exports. The owner (this
+  Mac, or your password) does everything.
+- The agent runs shell commands on this Mac and only its prompt keeps it to one project, so only an editor with **all
+  projects** starts it directly, approves comments or starts a new edit. An editor kept to one project picks options,
+  undoes and exports, but their comments wait for approval like a commenter's. The approval card shows everything the
+  agent will be told about the comment.
 - Change a role or **Remove** someone in the same panel; a change reaches their screen at once, and removing signs
   them out everywhere.
 - **Live room**: everyone in a project shows as an avatar in the header and as a playhead in their colour on the

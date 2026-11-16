@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Target } from "../types";
+import { runsDirectly, type Target } from "../types";
 import { cx, fmt } from "../util";
 import { useMe } from "../room";
 
@@ -90,7 +90,7 @@ export function Composer({ target, t, onSubmit, onCancel, onFocus, compact, wide
           </button>
         </div>
       </div>
-      {me?.role === "commenter" && <div className="mt-1.5 text-[11px] text-ink-500">An editor approves it, then Claude makes the change.</div>}
+      {me && !runsDirectly(me) && <div className="mt-1.5 text-[11px] text-ink-500">An editor approves it, then Claude makes the change.</div>}
     </div>
   );
 }

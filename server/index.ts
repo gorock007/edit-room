@@ -4,7 +4,8 @@ import http from "node:http";
 import express from "express";
 import { WebSocketServer, WebSocket } from "ws";
 import chokidar, { type FSWatcher } from "chokidar";
-import { ALLOWED_HOSTS, ALLOWED_ORIGINS, HOST, PORT, PUBLIC_HOSTS, READ_ROOTS, REMOTE_PORT, inside } from "./config.ts";
+import os from "node:os";
+import { ALLOWED_HOSTS, ALLOWED_ORIGINS, CAPCUT_DRAFTS, DATA_DIR, HOST, PORT, PUBLIC_HOSTS, READ_ROOTS, REMOTE_PORT, SKILL_DIR, VIDEO_ROOT, inside } from "./config.ts";
 import { getProject, listProjects, readModel, type Project } from "./projects.ts";
 import { buildProxy, proxyFile, proxyState } from "./proxy.ts";
 import { exportFile, exportName, exportState, startExport } from "./exporter.ts";
@@ -178,10 +179,20 @@ const sendTo = (personId: string, msg: unknown) => {
  * What a person sees of a comment. Editors see everything; commenters and viewers (often clients) see what was asked and
  * Claude's answer, not the agent's command log, costs or this Mac's file paths.
  */
+// this Mac's folders, longest first, so "/Users/me/…/Video Editor/1116s edit/x.json" reads "…/1116s edit/x.json"
+const PRIVATE_ROOTS = [...new Set([VIDEO_ROOT, CAPCUT_DRAFTS, DATA_DIR, SKILL_DIR, os.homedir()])].sort((a, b) => b.length - a.length);
+const redact = (s: string | undefined) => (s == null ? s : PRIVATE_ROOTS.reduce((acc, r) => acc.split(r).join("…"), s));
 const viewOf = (c: Comment, who: Person | undefined): Comment =>
   can(who, "editor")
     ? c
-    : { ...c, activity: c.activity.filter((a) => a.kind === "info" || a.kind === "text"), changed: c.changed?.map((f) => path.basename(f)), costUsd: undefined };
+    : {
+        ...c,
+        reply: redact(c.reply),
+        activity: c.activity.filter((a) => a.kind === "info" || a.kind === "text").map((a) => ({ ...a, text: redact(a.text)! })),
+        changed: c.changed?.map((f) => path.basename(f)),
+        options: c.options?.map(({ key, note, pictureChanged, picture }) => ({ key, note: redact(note)!, files: [], pictureChanged, picture })),
+        costUsd: undefined,
+      };
 
 const emitComment = (c: Comment) => {
   for (const [ws, peer] of peers) {
@@ -314,6 +325,7 @@ app.put("/api/projects/:id/uploads/:key", need("editor"), withProject(async (p, 
 
 const BUILD_LABEL = "first edit";
 app.post("/api/projects/:id/build", need("editor"), withProject((p, req, res) => {
+  if (!runsDirectly(me(req))) return res.status(403).json({ error: "Only people with access to every project can start a new edit." });
   if (p.draftDir) return res.status(400).json({ error: "this edit is already built" });
   const raw = rawInfo(p);
   if (!raw.files.length) return res.status(400).json({ error: "upload the footage first" });
@@ -367,6 +379,29 @@ app.get("/api/projects/:id/comments", withProject((p, req, res) => {
   res.json(loadComments(p).map((c) => viewOf(c, who)));
 }));
 
+/**
+ * The agent runs shell commands on this Mac, and the only thing keeping it to one project is its prompt. So only an
+ * editor with every project (someone the owner trusts with the whole Mac) starts it directly or approves a comment;
+ * everyone else's comments wait for such an editor to read them first.
+ */
+const runsDirectly = (p: Person) => can(p, "editor") && p.projects === "all";
+
+const KINDS = new Set(["caption", "frame", "sfx", "cut", "broll", "general"]);
+const short = (v: unknown, n: number) => String(v ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, n);
+/**
+ * The click target from the app, rebuilt from known kinds and short strings. It goes into the agent's prompt next to
+ * the comment, so it must not be a place to hide a longer request than the approver sees (the app shows all of it).
+ */
+function cleanTarget(t: any): Comment["target"] {
+  const kind = KINDS.has(t?.kind) ? t.kind : "general";
+  const label = short(t?.label, 120) || "the video";
+  const out: Comment["target"] = { kind, label };
+  if (t?.id != null && /^[\w.:-]{1,40}$/.test(String(t.id))) out.id = String(t.id);
+  const detail = short(t?.detail, 160);
+  if (detail) out.detail = detail;
+  return out;
+}
+
 // An editor's comment goes to the agent the moment it is posted (like Claude Design). A commenter's waits for an
 // editor to approve it: the agent runs commands on this Mac, so someone trusted reads every request first.
 app.post("/api/projects/:id/comments", need("commenter"), withProject((p, req, res) => {
@@ -375,16 +410,17 @@ app.post("/api/projects/:id/comments", need("commenter"), withProject((p, req, r
   if (b.target?.kind === "build") return res.status(400).json({ error: "use the build endpoint" });
   if (!p.draftDir) return res.status(400).json({ error: "this edit isn't built yet: start the edit first" });
   const who = me(req);
-  const direct = can(who, "editor");
+  const direct = runsDirectly(who);
+  const num = (v: unknown, lo: number, hi: number) => (Number.isFinite(Number(v)) ? Math.max(lo, Math.min(hi, Number(v))) : null);
   const c: Comment = {
     id: newId(),
     project: p.id,
     createdAt: Date.now(),
     text: String(b.text).trim().slice(0, 4000),
-    t: Number(b.t) || 0,
-    x: b.x == null ? null : Number(b.x),
-    y: b.y == null ? null : Number(b.y),
-    target: b.target ?? { kind: "general", label: "the video" },
+    t: num(b.t, 0, 86_400) ?? 0,
+    x: b.x == null ? null : num(b.x, 0, 1),
+    y: b.y == null ? null : num(b.y, 0, 1),
+    target: cleanTarget(b.target),
     status: direct ? "queued" : "pending",
     activity: direct ? [] : [{ at: Date.now(), kind: "info", text: "Waiting for an editor to approve it" }],
     want: Math.max(1, Math.min(KEYS.length, Number(b.want) || 1)),
@@ -399,6 +435,7 @@ app.post("/api/projects/:id/comments", need("commenter"), withProject((p, req, r
 app.post("/api/projects/:id/comments/:cid/approve", need("editor"), withProject((p, req, res) => {
   const cid = String(req.params.cid);
   const who = me(req);
+  if (!runsDirectly(who)) return res.status(403).json({ error: "Only an editor with access to every project can approve a comment for Claude." });
   let ok = false;
   const c = updateComment(p, cid, (x) => {
     if (x.status !== "pending") return;

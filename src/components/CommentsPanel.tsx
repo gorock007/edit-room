@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { can, type Comment, type Target } from "../types";
+import { can, runsDirectly, type Comment, type Target } from "../types";
 import { ago, basename, cx, fmt } from "../util";
 import { useMe } from "../room";
 import { Composer, TargetChip } from "./Composer";
@@ -26,6 +26,7 @@ type Props = {
 export function CommentsPanel(p: Props) {
   const me = useMe();
   const editor = can(me, "editor");
+  const approver = runsDirectly(me);
   const waiting = p.comments.filter((c) => c.status === "pending");
   const [onlyWaiting, setOnlyWaiting] = useState(false);
   const show = onlyWaiting && waiting.length ? waiting : p.comments;
@@ -67,18 +68,18 @@ export function CommentsPanel(p: Props) {
           <div className="mt-10 px-6 text-center text-[13px] leading-relaxed text-ink-400">
             {!can(me, "commenter") ? "No comments yet. You can watch the edit and follow the comments here." :
               p.full ? "Tap Comment, then tap anything in the frame to ask for a change." : <>Press <Kbd>C</Kbd> and click anything in the frame or on the timeline to ask for a change.</>}
-            {editor && " Claude starts on it the moment you send."}
+            {approver && " Claude starts on it the moment you send."}
           </div>
         )}
         {list.map((c) => (
-          <Card key={c.id} c={c} focused={p.focusId === c.id} editor={editor} mine={(c.author?.id ?? "owner") === me?.id} {...p} />
+          <Card key={c.id} c={c} focused={p.focusId === c.id} editor={editor} approver={approver} mine={(c.author?.id ?? "owner") === me?.id} {...p} />
         ))}
       </div>
     </aside>
   );
 }
 
-function Card({ c, focused, editor, mine, onFocus, onSeek, onStop, onUndo, onApprove, onDecline, onCompare }: { c: Comment; focused: boolean; editor: boolean; mine: boolean } & Props) {
+function Card({ c, focused, editor, approver, mine, onFocus, onSeek, onStop, onUndo, onApprove, onDecline, onCompare }: { c: Comment; focused: boolean; editor: boolean; approver: boolean; mine: boolean } & Props) {
   const ref = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   useEffect(() => {
@@ -115,8 +116,14 @@ function Card({ c, focused, editor, mine, onFocus, onSeek, onStop, onUndo, onApp
           </p>
         </div>
 
+        {c.status === "pending" && approver && (
+          // everything the agent will be told about the click, so nothing reaches it that the approver didn't read
+          <div className="mt-2 rounded-md bg-ink-950/50 px-2 py-1.5 text-[11px] leading-snug text-ink-400">
+            Clicked: <span className="text-ink-200">{c.target.label}</span>{c.target.detail ? <> · {c.target.detail}</> : null} at {fmt(c.t, true)}
+          </div>
+        )}
         {c.status === "pending" && (
-          editor ? (
+          approver ? (
             <div className="mt-2.5 flex gap-1.5">
               <button
                 onClick={(e) => {
