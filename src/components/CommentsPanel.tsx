@@ -21,6 +21,8 @@ type Props = {
   full?: boolean;
   /** a new edit before its first build: nothing to comment on yet, only the build's progress */
   noComposer?: boolean;
+  /** replaces the "Comments" title (the Comments / History switch) */
+  header?: React.ReactNode;
 };
 
 export function CommentsPanel(p: Props) {
@@ -37,7 +39,7 @@ export function CommentsPanel(p: Props) {
   return (
     <aside className={cx("flex shrink-0 flex-col bg-ink-900", p.full ? "w-full" : "w-[320px] border-l border-white/5 xl:w-[380px]")}>
       <div className="flex h-11 items-center justify-between gap-2 border-b border-white/5 px-4">
-        <div className="text-[13px] font-semibold text-ink-100">Comments</div>
+        {p.header ?? <div className="text-[13px] font-semibold text-ink-100">Comments</div>}
         <div className="flex items-center gap-2 text-[11px] text-ink-400">
           {waiting.length > 0 && (
             <button

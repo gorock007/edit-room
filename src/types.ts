@@ -31,6 +31,13 @@ export type Invite = { role: Role; projects: "all" | string[]; createdAt: number
 export type Presence = Person & { sid: string; project: string; t: number; playing: boolean; at: number };
 export type Author = { id: string; name: string; color: string; role: string; kind?: "agent" };
 export type McpUrls = { local: string; remote: string | null };
+export type VersionStats = { duration: number; cuts: number; cards: number; captions: number; sounds: number };
+export type VersionInfo = {
+  n: number; at: number; kind: "start" | "build" | "comment" | "pick" | "undo" | "restore" | "outside"; what: string;
+  by?: Author; comment?: string; label?: string; labelledBy?: string; changed: string[]; stats?: VersionStats;
+  /** an older version whose files are exactly the edit's now */
+  sameAsNow?: boolean;
+};
 
 export type Comment = {
   id: string; project: string; createdAt: number; text: string; t: number; x: number | null; y: number | null;

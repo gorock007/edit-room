@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Comment, EditModel, ExportState, Invite, McpUrls, Person, PersonFull, Presence, ProjectInfo, ProxyState, RawInfo, Role, Target } from "./types";
+import type { Comment, EditModel, ExportState, Invite, McpUrls, Person, PersonFull, Presence, ProjectInfo, ProxyState, RawInfo, Role, Target, VersionInfo } from "./types";
 
 /** Fired when the server says this device's session is gone; the app swaps to the login screen. */
 export const LOGIN_EVENT = "room:login";
@@ -55,6 +55,10 @@ export const api = {
   exportState: (id: string) => fetch(`/api/projects/${id}/export`).then(j<ExportState>),
   startExport: (id: string) => fetch(`/api/projects/${id}/export`, { method: "POST" }).then(j<ExportState>),
   fileUrl: (id: string, path: string) => `/media/${id}/file?p=${encodeURIComponent(path)}`,
+  versions: (id: string) => fetch(`/api/projects/${id}/versions`).then(j<{ versions: VersionInfo[]; current: number | null }>),
+  nameVersion: (id: string, n: number, label: string) => postJson(`/api/projects/${id}/versions/${n}/name`, { label }).then(j<VersionInfo>),
+  restoreVersion: (id: string, n: number) => fetch(`/api/projects/${id}/versions/${n}/restore`, { method: "POST" }).then(j<VersionInfo | null>),
+  versionModel: (id: string, n: number) => fetch(`/api/projects/${id}/versions/${n}/model`).then(j<{ model: EditModel; proxy: ProxyState; samePicture: boolean }>),
 };
 
 type Msg =
@@ -64,6 +68,7 @@ type Msg =
   | { type: "overlay"; id: string; at: number }
   | { type: "export"; id: string; export: ExportState }
   | { type: "presence"; people: Presence[] }
+  | { type: "versions"; id: string }
   | { type: "me" }
   | { type: "people" };
 

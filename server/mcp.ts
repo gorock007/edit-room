@@ -279,6 +279,50 @@ function buildServer(who: Person, d: McpDeps) {
   );
 
   server.registerTool(
+    "list_versions",
+    {
+      title: "Version history",
+      description:
+        "The edit's versions, newest first: what changed (the comment, a picked option, an undo, a restore, or a change made outside Edit Room), who asked, the files that changed, length/cuts/captions/sounds, and any name the owner gave it. `current` is the version the edit is at now.",
+      inputSchema: { project: id, limit: z.number().int().min(1).max(200).optional() },
+      annotations: { readOnlyHint: true },
+    },
+    guard(({ project: pid, limit }: { project: string; limit?: number }) => {
+      const r = d.room.listVersions(project(pid));
+      return text({
+        current: r.current,
+        versions: r.versions.slice(0, limit ?? 30).map((v) => ({
+          n: v.n,
+          ...(v.label ? { name: v.label } : {}),
+          what: v.what,
+          kind: v.kind,
+          by: v.by ? `${v.by.name}${v.by.kind === "agent" ? " (agent)" : ""}` : undefined,
+          when: new Date(v.at).toISOString(),
+          changed: v.changed,
+          ...(v.stats ? { stats: v.stats } : {}),
+        })),
+      });
+    }),
+  );
+
+  server.registerTool(
+    "name_version",
+    { title: "Name a version", description: "Editors: give a version a name (\"Sent to client v1\"); an empty name removes it.", inputSchema: { project: id, n: z.number().int().min(1), name: z.string().max(60) } },
+    guard(({ project: pid, n, name }: { project: string; n: number; name: string }) => text(d.room.nameVersion(project(pid), who, n, name))),
+  );
+
+  server.registerTool(
+    "restore_version",
+    {
+      title: "Restore a version",
+      description: "Editors: put the edit back to version n. The edit as it was is kept as a version too, so this can be undone by restoring that one.",
+      inputSchema: { project: id, n: z.number().int().min(1) },
+      annotations: { destructiveHint: true },
+    },
+    guard(({ project: pid, n }: { project: string; n: number }) => text(d.room.restoreVersion(project(pid), who, n) ?? "restored")),
+  );
+
+  server.registerTool(
     "export_video",
     {
       title: "Export the video",

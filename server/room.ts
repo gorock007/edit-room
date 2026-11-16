@@ -8,6 +8,7 @@ import { enqueue, stop } from "./agent.ts";
 import { KEYS, applyOption, hasOption } from "./options.ts";
 import { OWNER, can, type Person } from "./people.ts";
 import { loadComments, newId, restore, saveComments, updateComment, type Author, type Comment, type Target } from "./store.ts";
+import { info, nameVersion, record, restoreFiles, same, syncOutside, versions, type Version } from "./versions.ts";
 
 /**
  * What people (in the app) and agents (over MCP) can do in a project's room. Both go through these functions, so the
@@ -25,6 +26,7 @@ export type Emitters = {
   projectChanged: (p: Project) => void;
   overlayChanged: (p: Project) => void;
   exportChanged: (p: Project) => void;
+  versionsChanged: (p: Project) => void;
 };
 
 /**
@@ -98,7 +100,33 @@ export function targetFromModel(p: Project, kind: string, id: string): { target:
 }
 
 export function makeRoom(e: Emitters) {
-  const hooks = { emit: e.emitComment, projectChanged: e.projectChanged, overlayChanged: e.overlayChanged };
+  /** Save a version (fn) and tell the room if one was added. */
+  const rec = (p: Project, fn: () => Version | null) => {
+    const before = versions(p).at(-1)?.n;
+    const v = fn();
+    if (v && v.n !== before) e.versionsChanged(p);
+    return v;
+  };
+  /** Claude is changing this edit's files right now: no outside-change check, no restore. */
+  const agentBusy = (p: Project) => loadComments(p).some((c) => c.status === "working");
+  const outside = (p: Project) => {
+    if (!agentBusy(p)) rec(p, () => syncOutside(p));
+  };
+  const hooks = {
+    emit: e.emitComment,
+    projectChanged: e.projectChanged,
+    overlayChanged: e.overlayChanged,
+    starting: (p: Project) => rec(p, () => syncOutside(p)),
+    finished: (p: Project, c: Comment) =>
+      rec(p, () =>
+        record(p, {
+          kind: c.target.kind === "build" ? "build" : "comment",
+          what: c.target.kind === "build" ? "First edit" : c.text.slice(0, 200),
+          by: c.author,
+          comment: c.id,
+        }),
+      ),
+  };
   const find = (p: Project, cid: string) => {
     const c = loadComments(p).find((x) => x.id === cid);
     if (!c) throw new RoomError(404, "no such comment");
@@ -189,7 +217,9 @@ export function makeRoom(e: Emitters) {
       needRole(who, "editor");
       const c = find(p, cid);
       if (!c.changed?.length || c.status === "undone") throw new RoomError(400, "nothing to undo");
+      outside(p);
       restore(p, cid, c.changed);
+      rec(p, () => record(p, { kind: "undo", what: `Undid “${c.text.slice(0, 120)}”`, by: authorOf(who), comment: cid }));
       const u = updateComment(p, cid, (x) => {
         x.status = "undone";
         x.activity.push({ at: Date.now(), kind: "info", text: `Undone by ${who.name}: restored ${x.changed!.map((f) => path.basename(f)).join(", ")}` });
@@ -216,8 +246,10 @@ export function makeRoom(e: Emitters) {
         return u;
       }
       if (!KEYS.includes(key) || !hasOption(p, cid, key)) throw new RoomError(400, "no such option");
+      outside(p);
       const files = applyOption(p, cid, key); // undo restores the snapshot taken before the options were made
       const opt = c.options?.find((o) => o.key === key);
+      rec(p, () => record(p, { kind: "pick", what: `Picked option ${key}${opt ? `: ${opt.note}` : ""} for “${c.text.slice(0, 100)}”`, by: authorOf(who), comment: cid }));
       const u = updateComment(p, cid, (x) => {
         x.status = "done";
         x.chosen = key;
@@ -238,6 +270,49 @@ export function makeRoom(e: Emitters) {
     },
 
     exportState,
+    /** For starting the agent elsewhere (the first-edit build): versions get saved the same way. */
+    hooks,
+
+    // ---- version history ----
+
+    /** Newest first. `current` is the version the edit is at now (null if it changed since, e.g. mid-edit). */
+    listVersions(p: Project) {
+      if (!p.draftDir) return { versions: [], current: null };
+      outside(p); // also starts the history on first look
+      const list = versions(p);
+      const last = list.at(-1);
+      const current = last && !agentBusy(p) ? last.n : null;
+      // an older version with the very same files as now (e.g. the one just restored) has nothing to compare or restore
+      const asNow = (v: Version) => current != null && v.n !== current && same(v.files, last!.files);
+      return { versions: list.map((v) => ({ ...info(v), ...(asNow(v) ? { sameAsNow: true } : {}) })).reverse(), current };
+    },
+
+    nameVersion(p: Project, who: Person, n: number, label: unknown) {
+      needRole(who, "editor");
+      try {
+        const v = nameVersion(p, n, short(label, 60), who.name);
+        e.versionsChanged(p);
+        return info(v);
+      } catch (err: any) {
+        throw new RoomError(404, String(err?.message ?? err));
+      }
+    },
+
+    /** Put the edit back to version n. The edit as it was becomes a version first, so a restore can be undone too. */
+    restoreVersion(p: Project, who: Person, n: number) {
+      needRole(who, "editor");
+      if (agentBusy(p) || loadComments(p).some((c) => c.status === "queued")) throw new RoomError(409, "Wait for Claude to finish the comments in progress, then restore.");
+      const v = versions(p).find((x) => x.n === n);
+      if (!v) throw new RoomError(404, "no such version");
+      outside(p);
+      const wrote = restoreFiles(p, n);
+      if (!wrote.length) throw new RoomError(400, `The edit is already the same as version ${n}.`);
+      const saved = rec(p, () => record(p, { kind: "restore", what: `Restored version ${n}${v.label ? ` “${v.label}”` : ""}`, by: authorOf(who) }));
+      if (wrote.some((f) => f.endsWith("index.html"))) e.overlayChanged(p);
+      if (proxyState(p).status === "stale") buildProxy(p, () => e.projectChanged(p));
+      e.projectChanged(p);
+      return saved ? info(saved) : null;
+    },
   };
 }
 

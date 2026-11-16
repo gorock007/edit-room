@@ -11,7 +11,15 @@ import { ALL, coveredBy } from "../src/safezones.ts";
 import { rawDir, rawInfo } from "./uploads.ts";
 
 type Emit = (c: Comment) => void;
-type Hooks = { emit: Emit; projectChanged: (p: Project) => void; overlayChanged: (p: Project) => void };
+type Hooks = {
+  emit: Emit;
+  projectChanged: (p: Project) => void;
+  overlayChanged: (p: Project) => void;
+  /** about to change the files: anything changed outside Edit Room since the last version is saved first */
+  starting?: (p: Project) => void;
+  /** finished, and the files changed (or a first edit was built): save a version */
+  finished?: (p: Project, c: Comment) => void;
+};
 
 /** Projects where the agent is trying options in the real files: their file watchers stay quiet meanwhile. */
 export const quiet = new Set<string>();
@@ -233,6 +241,9 @@ async function runOne(p: Project, commentId: string, hooks: Hooks) {
     fs.mkdirSync(path.dirname(framePath), { recursive: true });
     await grabFrame(p, c.t, c.x, c.y, framePath).catch(() => (framePath = null));
   }
+  try {
+    hooks.starting?.(p);
+  } catch {}
   snapshot(p, c.id);
   const optionsMode = (c.want ?? 1) > 1;
   if (optionsMode) quiet.add(p.id);
@@ -319,6 +330,11 @@ async function runOne(p: Project, commentId: string, hooks: Hooks) {
       quiet.delete(p.id);
       hooks.overlayChanged(p); // the main preview is back to the original; make sure it shows it
     }
+    const fin = loadComments(p).find((x) => x.id === c.id);
+    if (fin && ((fin.changed?.length ?? 0) > 0 || (c.target.kind === "build" && fin.status === "done")))
+      try {
+        hooks.finished?.(p, fin);
+      } catch {}
     hooks.projectChanged(p);
   }
 }

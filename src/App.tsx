@@ -5,6 +5,8 @@ import { can, type Comment, type Device, type EditModel, type ExportState, type 
 import { MeContext } from "./room";
 import { Avatar, SharePanel } from "./components/People";
 import { ROLE_INFO } from "./Join";
+import { VersionsPanel } from "./components/VersionsPanel";
+import type { VersionInfo } from "./types";
 import { clamp, cx, fmt } from "./util";
 import { Stage, type StageHandle } from "./components/Stage";
 import { Timeline } from "./components/Timeline";
@@ -28,7 +30,12 @@ const store = {
   },
 };
 
-type Cell = { key: string; title: string; note?: string; model: EditModel; proxyUrl: string | null; proxyNote: string | null; overlayUrl: string | null };
+type Cell = {
+  key: string; title: string; note?: string; model: EditModel; proxyUrl: string | null; proxyNote: string | null; overlayUrl: string | null;
+  kind?: "current" | "option" | "version";
+  /** appended to sound file URLs (a version's sounds: "&v=3") */
+  soundQuery?: string;
+};
 const VERTICAL_ASK =
   "Make the 9:16 version of this edit as its own CapCut project. Follow the talking-head-reel-edit skill's " +
   "\"9:16 version\" section: re-lay out every card and animation with verticalize_card.py and check each one, build " +
@@ -62,7 +69,13 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
   const [presence, setPresence] = useState<Presence[]>([]);
   const [sharing, setSharing] = useState(false);
   const narrow = useNarrow();
-  const [tab, setTab] = useState<"comments" | "timeline">("comments");
+  const [tab, setTab] = useState<"comments" | "timeline" | "history">("comments");
+  const [side, setSide] = useState<"comments" | "history">("comments");
+  // version history, and the version being compared side by side with the current edit
+  const [history, setHistory] = useState<{ versions: VersionInfo[]; current: number | null }>({ versions: [], current: null });
+  const [compareVer, setCompareVer] = useState<number | null>(null);
+  const [verModel, setVerModel] = useState<{ n: number; model: EditModel; proxy: ProxyState; samePicture: boolean } | null>(null);
+  const [verTick, setVerTick] = useState(0);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [pid, setPid] = useState<string | null>(store.get("room.project"));
   const [model, setModel] = useState<EditModel | null>(null);
@@ -124,6 +137,8 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
     setExportSt(null);
     setTime(0);
     setCompareId(null);
+    setCompareVer(null);
+    setHistory({ versions: [], current: null });
     if (pid === NEW) return setComments([]);
     store.set("room.project", pid);
     api.comments(pid).then(setComments);
@@ -146,6 +161,22 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
 
   const compare = comments.find((c) => c.id === compareId && c.status === "review") ?? null;
 
+  // history: loaded with the project, refreshed whenever the server saves a version
+  const loadHistory = useCallback((id: string) => api.versions(id).then(setHistory).catch(() => {}), []);
+  useEffect(() => {
+    if (pid && pid !== NEW && info?.hasDraft) loadHistory(pid);
+  }, [pid, info?.hasDraft, loadHistory]);
+  // the compared version's timeline (and its picture, which may still be building)
+  useEffect(() => {
+    if (!pid || compareVer == null) return setVerModel(null);
+    api.versionModel(pid, compareVer).then((r) => setVerModel({ n: compareVer, ...r })).catch((e) => {
+      setError(e.message);
+      setCompareVer(null);
+    });
+  }, [pid, compareVer, verTick]);
+  const versionCompare = !compare && compareVer != null && verModel?.n === compareVer;
+  const comparedVersion = versionCompare ? history.versions.find((v) => v.n === compareVer) : undefined;
+
   // fetch each option's model (its captions and sounds); refetch when an option's picture finishes
   const optionSig = compare?.options?.map((o) => `${o.key}:${o.picture}`).join(",") ?? "";
   useEffect(() => {
@@ -164,7 +195,26 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
 
   const cells: Cell[] = useMemo(() => {
     if (!model) return [];
-    const current: Cell = { key: "current", title: compare ? "Current" : "", model, proxyUrl, proxyNote, overlayUrl };
+    const current: Cell = { key: "current", kind: "current", title: compare || versionCompare ? "Current" : "", model, proxyUrl, proxyNote, overlayUrl };
+    if (versionCompare && pid && verModel) {
+      const n = verModel.n;
+      const own = !verModel.samePicture;
+      const ready = verModel.proxy.status === "ready" || verModel.proxy.status === "stale";
+      return [
+        current,
+        {
+          key: `v${n}`,
+          kind: "version",
+          title: `Version ${n}`,
+          note: comparedVersion?.label ?? comparedVersion?.what ?? `Version ${n}`,
+          model: verModel.model,
+          proxyUrl: own ? (ready && verModel.proxy.version > 0 ? `/media/${pid}/versions/${n}/proxy.mp4?v=${verModel.proxy.version}` : null) : proxyUrl,
+          proxyNote: own && !ready ? (verModel.proxy.status === "failed" ? "This version's picture failed to build" : "Building this version's picture — about a minute") : own ? null : proxyNote,
+          overlayUrl: verModel.model.hasOverlay ? `/overlay/${pid}/v/${n}/index.html?at=${overlayAt}` : null,
+          soundQuery: `&v=${n}`,
+        },
+      ];
+    }
     if (!compare || !pid) return [current];
     return [
       current,
@@ -173,6 +223,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
         const own = o.pictureChanged;
         return {
           key: o.key,
+          kind: "option",
           title: `Option ${o.key}`,
           note: o.note,
           model: om?.model ?? model,
@@ -182,20 +233,21 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
         };
       }),
     ];
-  }, [model, compare, pid, optModels, proxyUrl, proxyNote, overlayUrl, overlayAt]);
+  }, [model, compare, pid, optModels, proxyUrl, proxyNote, overlayUrl, overlayAt, versionCompare, verModel, comparedVersion]);
+  const comparing = cells.length > 1;
 
   // the sounds you hear are the listened cell's (or the edit's, outside compare)
   const listened = cells.find((c) => c.key === listen) ?? cells[0];
   useEffect(() => {
     if (!pid || !listened) return;
-    engine.load(listened.model.sfx, (s) => api.fileUrl(pid, s.file)).then(() => {
+    engine.load(listened.model.sfx, (s) => api.fileUrl(pid, s.file) + (listened.soundQuery ?? "")).then(() => {
       const v = players.current[0]?.video;
       if (v && !v.paused) engine.schedule(v.currentTime);
     });
   }, [listened?.model, pid, engine]);
   useEffect(() => {
-    if (!compare) setListen("current");
-  }, [compare]);
+    if (!comparing) setListen("current");
+  }, [comparing]);
 
   const { online, send } = useSocket((m) => {
     if (m.type === "presence") setPresence(m.people);
@@ -215,6 +267,10 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
     }
     if (m.type === "overlay" && m.id === pid) setOverlayAt(m.at);
     if (m.type === "export" && m.id === pid) setExportSt(m.export);
+    if (m.type === "versions" && m.id === pid) {
+      loadHistory(pid);
+      setVerTick((n) => n + 1); // a compared version's picture may have finished building
+    }
   });
 
   // tell the room where I am: the project I have open and my playhead (at most 4 times a second, the last one always)
@@ -314,10 +370,11 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
       if (e.key === " ") {
         e.preventDefault();
         toggle();
-      } else if ((e.key === "c" || e.key === "C") && !compare && commenter) setCommentMode((m) => !m);
+      } else if ((e.key === "c" || e.key === "C") && !comparing && commenter) setCommentMode((m) => !m);
       else if (e.key === "Escape") {
         setCommentMode(false);
         setCompareId(null);
+        setCompareVer(null);
       } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
         // like CapCut: one frame per press (hold to keep moving), Shift = one second
         e.preventDefault();
@@ -332,7 +389,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [toggle, seek, time, model, compare, safe]);
+  }, [toggle, seek, time, model, comparing, safe]);
 
   // a finished request can create a project (the 9:16 version): pick it up
   const doneCount = comments.filter((c) => c.status === "done").length;
@@ -363,6 +420,37 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
   const dev: Device = narrow ? "desktop" : device; // on a real phone the phone is the frame
   const aspect = model ? `${model.width} / ${model.height}` : "16 / 9";
   const rows = Math.ceil(cells.length / cols);
+
+  const restoreVersion = async (n: number) => {
+    if (!pid) return;
+    try {
+      await api.restoreVersion(pid, n);
+      setCompareVer(null);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+  const showComment = (id: string) => {
+    const c = comments.find((x) => x.id === id);
+    if (!c) return;
+    setFocusId(id);
+    seek(c.t);
+    narrow ? setTab("comments") : setSide("comments");
+  };
+  // the Comments / History switch at the top of the side panel
+  const sideHeader = (
+    <div className="flex rounded-lg bg-ink-950 p-0.5 ring-1 ring-white/5">
+      {(["comments", "history"] as const).map((k) => (
+        <button
+          key={k}
+          onClick={() => setSide(k)}
+          className={cx("rounded-md px-2.5 py-0.5 text-[12px] font-semibold capitalize transition", side === k ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-200")}
+        >
+          {k}
+        </button>
+      ))}
+    </div>
+  );
 
   const decline = (cid: string) => {
     if (!pid) return;
@@ -452,7 +540,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
               <span className={cx(narrow && "hidden")}>{ROLE_INFO[me.role].label}</span>
             </span>
           )}
-          {editor && model && !portrait && pid && !pid.endsWith("v") && !projects.some((p) => p.id === `${pid}v`) && !compare && (
+          {editor && model && !portrait && pid && !pid.endsWith("v") && !projects.some((p) => p.id === `${pid}v`) && !comparing && (
             <button
               onClick={() => {
                 if (!confirm("Make a 9:16 version? Claude builds it as a separate CapCut project: new card layouts, captions and face framing. It takes a while (about 20-40 min) and the 16:9 edit stays as it is.")) return;
@@ -490,7 +578,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
       )}
 
       <div className={cx("flex min-h-0 flex-1", narrow && "flex-col overflow-y-auto")}>
-        <main className={cx("flex min-w-0 flex-col", narrow ? (compare || !model ? "" : "sticky top-0 z-30 bg-ink-950") : "flex-1 overflow-y-auto")}>
+        <main className={cx("flex min-w-0 flex-col", narrow ? (comparing || !model ? "" : "sticky top-0 z-30 bg-ink-950") : "flex-1 overflow-y-auto")}>
           {compare && (
             <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-white/5 bg-ink-900/60 px-3 py-1.5 text-[12px] md:px-4">
               <span className="rounded bg-gold px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-ink-950">Compare</span>
@@ -505,15 +593,35 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
               </button>
             </div>
           )}
+          {versionCompare && compareVer != null && (
+            <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-white/5 bg-ink-900/60 px-3 py-1.5 text-[12px] md:px-4">
+              <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-ink-100">Version {compareVer}</span>
+              <span className="min-w-0 flex-1 truncate text-ink-200">
+                {comparedVersion?.label ? <b className="mr-1.5 font-semibold text-gold">{comparedVersion.label}</b> : null}
+                {comparedVersion?.what}
+              </span>
+              {editor && compareVer !== history.current && (
+                <button
+                  onClick={() => confirm(`Restore version ${compareVer}? The edit as it is now stays in the history.`) && restoreVersion(compareVer)}
+                  className="rounded-md bg-gold px-2 py-1 font-semibold text-ink-950 hover:brightness-110"
+                >
+                  Restore this version
+                </button>
+              )}
+              <button onClick={() => setCompareVer(null)} className="rounded-md px-2 py-1 text-ink-400 hover:bg-white/5" title="Close (Esc)">
+                Close
+              </button>
+            </div>
+          )}
 
           {model ? (
             <div
-              className={cx(narrow ? "" : "min-h-0 flex-1", compare ? "grid gap-2 p-2" : "flex")}
-              style={compare ? { gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gridTemplateRows: narrow ? undefined : `repeat(${rows}, minmax(0, 1fr))` } : undefined}
+              className={cx(narrow ? "" : "min-h-0 flex-1", comparing ? "grid gap-2 p-2" : "flex")}
+              style={comparing ? { gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gridTemplateRows: narrow ? undefined : `repeat(${rows}, minmax(0, 1fr))` } : undefined}
             >
               {cells.map((cell, i) => (
-                <div key={cell.key} className={cx("flex min-h-0 min-w-0 flex-1 flex-col", compare && cx("overflow-hidden rounded-xl bg-ink-900/70 ring-1", listen === cell.key ? "ring-gold/40" : "ring-white/5"))}>
-                  {compare && (
+                <div key={cell.key} className={cx("flex min-h-0 min-w-0 flex-1 flex-col", comparing && cx("overflow-hidden rounded-xl bg-ink-900/70 ring-1", listen === cell.key ? "ring-gold/40" : "ring-white/5"))}>
+                  {comparing && (
                     <div className="flex h-9 shrink-0 items-center gap-2 px-3">
                       <span className={cx("grid h-5 min-w-5 place-items-center rounded px-1 text-[10px] font-bold", cell.key === "current" ? "bg-white/10 text-ink-200" : "bg-gold text-ink-950")}>
                         {cell.key === "current" ? "NOW" : cell.key}
@@ -527,7 +635,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
                       >
                         {listen === cell.key ? "Listening" : "Listen"}
                       </button>
-                      {cell.key !== "current" && editor && (
+                      {cell.kind === "option" && editor && (
                         <button onClick={() => pick(cell.key)} className="rounded-md bg-gold px-2 py-0.5 text-[11px] font-semibold text-ink-950 hover:brightness-110">
                           Use this
                         </button>
@@ -547,12 +655,12 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
                     pad={narrow ? 0 : 28}
                     sheet={narrow}
                     time={time}
-                    commentMode={commentMode && !compare}
-                    comments={compare ? [] : comments}
+                    commentMode={commentMode && !comparing}
+                    comments={comparing ? [] : comments}
                     focusId={focusId}
                     onFocus={setFocusId}
                     onSubmit={submit}
-                    muted={compare ? listen !== cell.key : false}
+                    muted={comparing ? listen !== cell.key : false}
                     safe={safe}
                     onVideoEvent={i === 0 ? leaderEvent : followerEvent(i)}
                   />
@@ -612,7 +720,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
                 <span className="hidden text-[11px] text-ink-500 xl:block">
                   <Kbd>Space</Kbd> play · <Kbd>←</Kbd><Kbd>→</Kbd> frame · <Kbd>1</Kbd><Kbd>2</Kbd><Kbd>3</Kbd> device · <Kbd>S</Kbd> safe zones
                 </span>
-                {!compare && commenter && (
+                {!comparing && commenter && (
                   <button
                     onClick={() => setCommentMode(!commentMode)}
                     className={cx(
@@ -629,7 +737,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
               </div>
               {narrow && (
                 <div className="flex shrink-0 border-t border-white/5 bg-ink-900 px-3">
-                  {(["comments", "timeline"] as const).map((k) => (
+                  {(["comments", "timeline", "history"] as const).map((k) => (
                     <button
                       key={k}
                       onClick={() => setTab(k)}
@@ -646,7 +754,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
                 model={model}
                 time={time}
                 comments={comments}
-                commentMode={commentMode && !compare}
+                commentMode={commentMode && !comparing}
                 onSeek={seek}
                 onPause={() => leader()?.video?.pause()}
                 onSolo={(s) => engine.solo(s)}
@@ -659,8 +767,27 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
           )}
         </main>
 
-        {(!narrow || tab === "comments") && pid !== NEW && !(showNew && comments.length === 0) && (
+        {(narrow ? tab === "history" : side === "history" && model) && pid !== NEW && (
+          <VersionsPanel
+            header={narrow ? undefined : sideHeader}
+            full={narrow}
+            versions={history.versions}
+            current={history.current}
+            comparing={versionCompare ? compareVer : null}
+            canEdit={editor}
+            onCompare={(n) => {
+              setCompareId(null);
+              setCompareVer(n);
+              if (narrow && n != null) document.querySelector("main")?.scrollIntoView({ block: "start" });
+            }}
+            onRestore={restoreVersion}
+            onName={(n, label) => pid && api.nameVersion(pid, n, label).catch((e) => setError(e.message))}
+            onShowComment={showComment}
+          />
+        )}
+        {(narrow ? tab === "comments" : side === "comments" || !model) && pid !== NEW && !(showNew && comments.length === 0) && (
         <CommentsPanel
+          header={narrow || !model ? undefined : sideHeader}
           noComposer={showNew}
           full={narrow}
           comments={comments}

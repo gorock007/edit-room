@@ -19,6 +19,7 @@ import { loadComments, newId, saveComments, type Comment } from "./store.ts";
 import { MAX_CHUNK, newEditFolder, putChunk, rawDir, rawInfo, saveNote, startUpload } from "./uploads.ts";
 import { RoomError, authorOf, makeRoom, runsDirectly, viewOf } from "./room.ts";
 import { mcpHandler } from "./mcp.ts";
+import { versionProject } from "./versions.ts";
 
 const app = express();
 app.set("case sensitive routing", true); // "/API/..." must not reach a route the login gate didn't recognise
@@ -204,8 +205,9 @@ const emitComment = (c: Comment) => {
 const projectChanged = (p: Project) => send({ type: "project", id: p.id, proxy: proxyState(p) }, p.id);
 const exportChanged = (p: Project) => send({ type: "export", id: p.id, export: exportState(p) }, p.id);
 const overlayChanged = (p: Project) => send({ type: "overlay", id: p.id, at: Date.now() }, p.id);
-const hooks = { emit: emitComment, projectChanged, overlayChanged };
-const room = makeRoom({ emitComment, projectChanged, overlayChanged, exportChanged });
+const versionsChanged = (p: Project) => send({ type: "versions", id: p.id }, p.id);
+const room = makeRoom({ emitComment, projectChanged, overlayChanged, exportChanged, versionsChanged });
+const hooks = room.hooks;
 
 type Here = ReturnType<typeof publicPerson> & { sid: string; project: string; t: number; playing: boolean; at: number };
 function hereNow(): Here[] {
@@ -417,6 +419,34 @@ app.post("/api/projects/:id/comments/:cid/stop", withProject((p, req, res) => re
 app.post("/api/projects/:id/comments/:cid/undo", withProject((p, req, res) => res.json(room.undo(p, me(req), String(req.params.cid)))));
 app.post("/api/projects/:id/comments/:cid/pick", withProject((p, req, res) => res.json(room.pick(p, me(req), String(req.params.cid), String(req.body?.key ?? "")))));
 
+// ---- version history: list, name, restore, and preview any version next to the current edit ----
+const versionN = (req: express.Request) => {
+  const n = Number(req.params.n);
+  if (!Number.isInteger(n) || n < 1) throw new RoomError(404, "no such version");
+  return n;
+};
+const versionOf = (p: Project, req: express.Request) => {
+  const vp = versionProject(p, versionN(req));
+  if (!vp) throw new RoomError(404, "no such version");
+  return vp;
+};
+app.get("/api/projects/:id/versions", withProject((p, _req, res) => res.json(room.listVersions(p))));
+app.post("/api/projects/:id/versions/:n/name", withProject((p, req, res) => res.json(room.nameVersion(p, me(req), versionN(req), req.body?.label))));
+app.post("/api/projects/:id/versions/:n/restore", withProject((p, req, res) => res.json(room.restoreVersion(p, me(req), versionN(req)))));
+// a version's timeline and preview: it reuses the current picture when its cuts are the same, else builds its own
+app.get("/api/projects/:id/versions/:n/model", withProject((p, req, res) => {
+  const vp = versionOf(p, req);
+  const model = readModel(vp);
+  const samePicture = model.pictureHash === readModel(p).pictureHash;
+  if (!samePicture && proxyState(vp).status === "missing") buildProxy(vp, () => versionsChanged(p));
+  res.json({ model, proxy: proxyState(vp), samePicture });
+}));
+app.get("/media/:id/versions/:n/proxy.mp4", withProject((p, req, res) => {
+  const vp = versionOf(p, req);
+  if (!fs.existsSync(proxyFile(vp))) return res.status(404).end();
+  res.sendFile(proxyFile(vp), { headers: { "Cache-Control": "no-cache" } });
+}));
+
 // ---- options: preview each one, then use one or keep the current version ----
 const optionOf = (p: Project, req: express.Request) => {
   const cid = String(req.params.cid), key = String(req.params.key);
@@ -466,8 +496,13 @@ app.get("/media/:id/file", withProject((p, req, res) => {
       return false;
     }
   };
-  // the current edit's sounds, or those of an option waiting to be compared
-  const known = uses(p) || loadComments(p).some((c) => c.status === "review" && c.options?.some((o) => uses(optionProject(p, c.id, o.key))));
+  // the current edit's sounds, those of an option waiting to be compared, or of the version being previewed (?v=n)
+  const vq = Number(req.query.v);
+  const vp = Number.isInteger(vq) && vq > 0 ? versionProject(p, vq) : null;
+  const known =
+    uses(p) ||
+    (vp != null && uses(vp)) ||
+    loadComments(p).some((c) => c.status === "review" && c.options?.some((o) => uses(optionProject(p, c.id, o.key))));
   if (!known || !inside(f, READ_ROOTS) || !fs.existsSync(f)) return res.status(404).end();
   res.sendFile(f);
 }));
@@ -494,6 +529,13 @@ app.get("/overlay/:id/{*rest}", withProject((p, req, res) => {
     if (!hasOption(p, m[1], m[2])) return res.status(404).end();
     dir = optionProject(p, m[1], m[2]).overlaysDir;
     rest = m[3] || "index.html";
+  }
+  const v = rest.match(/^v\/(\d{1,6})\/(.*)$/); // a version's captions
+  if (v) {
+    const vp = versionProject(p, Number(v[1]));
+    if (!vp) return res.status(404).end();
+    dir = vp.overlaysDir;
+    rest = v[2] || "index.html";
   }
   if (!dir) return res.status(404).end();
   const f = path.resolve(dir, rest);

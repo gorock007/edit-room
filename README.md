@@ -69,6 +69,24 @@ console (Machines → ⋯ → Share), so the `https://<this-mac>…ts.net` link 
 anywhere. There is no plain-Wi-Fi mode on purpose: without HTTPS anyone on the network could read their session.
 People, invites (hashed) and sessions live in `data/people.json` and `data/sessions.json`.
 
+## Version history
+
+**History** (next to Comments; a tab on the phone) lists every version of the edit, newest first, like Google Docs:
+
+- A version is saved after every change: a finished comment, a picked option, an undo, a restore. A change made outside
+  Edit Room (CapCut, a chat with Claude, a script) becomes its own version, *Changed outside Edit Room*, the next time
+  anything happens, so it never mixes with Claude's.
+- Each shows who asked (people round, agents square), what was asked (click it to jump to the comment), and what moved
+  (−1.2 s, +1 sound…). Editors **Name** a version (*Sent to client v1*); **Named** filters to those.
+- **Compare** plays a version side by side with the current edit, in sync (Listen switches the sound between them);
+  it reuses the current picture when the cuts are the same, else builds the version's own (about a minute).
+- **Restore** (editors) puts the edit back to that version. It is saved as a new version, so restoring is undoable
+  too. Not while Claude is working on a comment.
+
+A version is the edit's files (the CapCut draft, the caption composition and its data, the edit-data plans), each
+content stored once in `data/<project>/versions/` by its hash. Footage and rendered cards are not versioned: an old
+version plays with today's media. Agents get the same over MCP: `list_versions`, `name_version`, `restore_version`.
+
 ## Agents (MCP)
 
 Other agents join the room like people do. Edit Room is an MCP server at `/mcp` (Streamable HTTP): **Share → Connect
