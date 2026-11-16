@@ -27,6 +27,8 @@ export type EditModel = {
   sfx: Sfx[];
   hasOverlay: boolean;
   pictureHash: string;
+  /** size + modified time of the media behind the picture: a graphic re-rendered under the same name changes it */
+  pictureMedia: string;
   draftMtime: number;
 };
 
@@ -85,6 +87,29 @@ function findDraft(id: string, editDir: string): string | null {
 }
 
 const fixPath = (p: string, draftDir: string) => p.replace(/##_draftpath_placeholder_[^#]*_##/, draftDir);
+
+/**
+ * Size and modified time of each file, hashed. Re-rendering a graphic and copying it over the same name in
+ * claude_media leaves draft_info.json untouched, so hashes of the draft alone miss it; this doesn't.
+ */
+export function mediaStamp(files: string[]): string {
+  const h = crypto.createHash("sha1");
+  for (const f of [...new Set(files.filter(Boolean))].sort()) {
+    let st = "missing";
+    try {
+      const s = fs.statSync(f);
+      st = `${s.size}|${s.mtimeMs}`;
+    } catch {}
+    h.update(`${f}|${st};`);
+  }
+  return h.digest("hex").slice(0, 16);
+}
+
+/** Every video and audio file the draft uses (what an export reads). */
+export function draftMediaFiles(draftDir: string): string[] {
+  const d = JSON.parse(fs.readFileSync(path.join(draftDir, "draft_info.json"), "utf8"));
+  return [...(d.materials?.videos ?? []), ...(d.materials?.audios ?? [])].map((m: any) => fixPath(m.path ?? "", draftDir));
+}
 
 export function readModel(p: Project): EditModel {
   if (!p.draftDir) throw new Error(`no CapCut draft found for ${p.name}`);
@@ -150,6 +175,7 @@ export function readModel(p: Project): EditModel {
     sfx,
     hasOverlay: !!p.overlaysDir,
     pictureHash,
+    pictureMedia: mediaStamp([...main, ...broll, ...behind].map((s: any) => fixPath(vids.get(s.material_id)?.path ?? "", p.draftDir!))),
     draftMtime: fs.statSync(draftFile).mtimeMs,
   };
 }

@@ -17,11 +17,13 @@ export function proxyState(p: Project): ProxyState {
   if (building.has(p.id)) return { status: "building", builtHash: m?.hash, version: m?.version ?? 0 };
   if (errors.has(p.id)) return { status: "failed", error: errors.get(p.id), version: m?.version ?? 0 };
   if (!m || !fs.existsSync(proxyFile(p))) return { status: "missing", version: 0 };
-  let current = m.hash;
+  let fresh = true;
   try {
-    current = readModel(p).pictureHash;
+    const model = readModel(p);
+    // proxies built before media was tracked have no m.media; they go stale only on a picture change
+    fresh = model.pictureHash === m.hash && (m.media === undefined || m.media === model.pictureMedia);
   } catch {}
-  return { status: current === m.hash ? "ready" : "stale", builtHash: m.hash, version: m.version };
+  return { status: fresh ? "ready" : "stale", builtHash: m.hash, version: m.version };
 }
 
 function run(cmd: string, args: string[], cwd?: string) {
@@ -44,7 +46,7 @@ export function buildProxy(p: Project, onChange: () => void): Promise<void> {
   errors.delete(p.id);
   const job = (async () => {
     const model = readModel(p);
-    const hash = model.pictureHash;
+    const hash = model.pictureHash, media = model.pictureMedia;
     const work = path.join(p.dataDir, "proxy-work");
     fs.rmSync(work, { recursive: true, force: true });
     fs.mkdirSync(work, { recursive: true });
@@ -55,7 +57,7 @@ export function buildProxy(p: Project, onChange: () => void): Promise<void> {
       "-movflags", "+faststart", tmp]); // no -shortest: it trimmed the picture to the encoded audio's end, a few frames early
     fs.renameSync(tmp, proxyFile(p));
     const prev = fs.existsSync(meta(p)) ? JSON.parse(fs.readFileSync(meta(p), "utf8")) : { version: 0 };
-    fs.writeFileSync(meta(p), JSON.stringify({ hash, builtAt: Date.now(), version: (prev.version ?? 0) + 1 }));
+    fs.writeFileSync(meta(p), JSON.stringify({ hash, media, builtAt: Date.now(), version: (prev.version ?? 0) + 1 }));
     fs.rmSync(work, { recursive: true, force: true });
   })()
     .catch((e) => {

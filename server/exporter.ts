@@ -4,7 +4,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { SKILL_DIR } from "./config.ts";
-import type { Project } from "./projects.ts";
+import { draftMediaFiles, mediaStamp, type Project } from "./projects.ts";
 
 /**
  * Upload-ready export for Instagram Reels and TikTok, straight from the CapCut draft (the skill's export_social.py:
@@ -37,6 +37,13 @@ const draftHash = (p: Project) => {
     return "";
   }
 };
+const mediaHash = (p: Project) => {
+  try {
+    return mediaStamp(draftMediaFiles(p.draftDir!));
+  } catch {
+    return "";
+  }
+};
 /** "1114b 9x16 - Reels & TikTok.mp4": the CapCut project's name, so the user knows which edit it is. */
 export const exportName = (p: Project) => `${path.basename(p.draftDir ?? p.name)} - Reels & TikTok.mp4`;
 
@@ -46,14 +53,16 @@ export function exportState(p: Project): ExportState {
   if (errors.has(p.id)) return { status: "failed", error: errors.get(p.id) };
   if (!fs.existsSync(metaFile(p)) || !fs.existsSync(exportFile(p))) return { status: "none" };
   const m = JSON.parse(fs.readFileSync(metaFile(p), "utf8"));
-  return { status: m.hash === draftHash(p) ? "ready" : "stale", report: m.report, savedTo: m.savedTo, at: m.at };
+  // exports written before media was tracked have no m.media; they go stale only on a draft change
+  const fresh = m.hash === draftHash(p) && (m.media === undefined || m.media === mediaHash(p));
+  return { status: fresh ? "ready" : "stale", report: m.report, savedTo: m.savedTo, at: m.at };
 }
 
 export function startExport(p: Project, onChange: () => void): ExportState {
   if (!p.draftDir) throw new Error("this edit has no CapCut draft yet");
   if (running.has(p.id)) return exportState(p);
   errors.delete(p.id);
-  const hash = draftHash(p);
+  const hash = draftHash(p), media = mediaHash(p);
   const work = path.join(os.homedir(), "Movies", "claude_render", "edit-room-export", p.id);
   const tmp = path.join(p.dataDir, "export.tmp.mp4");
   fs.rmSync(work, { recursive: true, force: true });
@@ -101,7 +110,7 @@ export function startExport(p: Project, onChange: () => void): ExportState {
       } catch {
         savedTo = undefined;
       }
-      fs.writeFileSync(metaFile(p), JSON.stringify({ hash, report, savedTo, at: Date.now() }));
+      fs.writeFileSync(metaFile(p), JSON.stringify({ hash, media, report, savedTo, at: Date.now() }));
       fs.rmSync(work, { recursive: true, force: true });
     } catch (e) {
       errors.set(p.id, String((e as Error).message ?? e));
