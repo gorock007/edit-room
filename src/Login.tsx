@@ -48,6 +48,7 @@ export function Login({ hasPassword, onDone }: { hasPassword: boolean; onDone: (
               {busy ? "Checking…" : "Log in"}
             </button>
             <p className="mt-3 text-[11px] leading-relaxed text-ink-500">Stays logged in on this device for 30 days.</p>
+            <p className="mt-2 text-[11px] leading-relaxed text-ink-500">Invited by someone? The password is only the owner's. Ask them for a new invite link.</p>
           </>
         ) : (
           <p className="text-[13px] leading-relaxed text-ink-300">

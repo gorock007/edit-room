@@ -10,7 +10,10 @@ export type Target = {
   detail?: string;
 };
 export type Activity = { at: number; kind: "tool" | "text" | "info" | "error"; text: string };
-export type CommentStatus = "queued" | "working" | "review" | "done" | "failed" | "stopped" | "undone";
+// pending = a commenter's comment waiting for an editor to approve it; declined = an editor said no
+export type CommentStatus = "pending" | "declined" | "queued" | "working" | "review" | "done" | "failed" | "stopped" | "undone";
+/** Who wrote a comment (a copy, so it still reads right after the person is renamed or removed). No author = the owner. */
+export type Author = { id: string; name: string; color: string; role: string };
 export type Option = { key: string; note: string; files: string[]; pictureChanged: boolean; picture?: "building" | "ready" | "failed" };
 export type Comment = {
   id: string;
@@ -31,6 +34,8 @@ export type Comment = {
   want?: number; // how many options the user asked for (1 = just do it)
   options?: Option[];
   chosen?: string; // the option key used, or "current"
+  author?: Author;
+  approvedBy?: string; // the editor who let a commenter's comment run (or declined it)
 };
 
 const file = (p: Project) => path.join(p.dataDir, "comments.json");

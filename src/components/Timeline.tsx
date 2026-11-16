@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import type { Comment, EditModel, Sfx, Target } from "../types";
+import type { Comment, EditModel, Presence, Sfx, Target } from "../types";
 import { cx, fmt } from "../util";
 import { Composer } from "./Composer";
 
@@ -13,6 +13,8 @@ type Props = {
   onSolo: (s: Sfx) => void;
   onSubmit: (c: { text: string; t: number; x: null; y: null; target: Target; want: number }) => void;
   onFocus: (id: string) => void;
+  /** other people in this project right now: their playheads, in their colour */
+  others?: Presence[];
 };
 
 const LABEL_W = 92;
@@ -225,6 +227,24 @@ export function Timeline(p: Props) {
                       </button>
                     ))}
               </div>
+            </div>
+          ))}
+
+          {/* other people's playheads: a thin line in their colour, their name on the ruler (click to go there) */}
+          {(p.others ?? []).map((o) => (
+            <div key={o.sid} className="pointer-events-none absolute top-0 bottom-0 z-[15] w-px opacity-70" style={{ left: LABEL_W + x(Math.min(o.t, D)), background: o.color }}>
+              <button
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  p.onSeek(o.t);
+                }}
+                className="pointer-events-auto absolute -top-px left-0 max-w-[90px] truncate rounded-r-sm px-1 text-[9px] font-bold leading-[13px] text-ink-950"
+                style={{ background: o.color }}
+                title={`${o.name} is at ${fmt(o.t)}${o.playing ? " (playing)" : ""}. Click to go there.`}
+              >
+                {o.playing ? "▶ " : ""}{o.name.split(" ")[0]}
+              </button>
             </div>
           ))}
 

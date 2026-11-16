@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Target } from "../types";
 import { cx, fmt } from "../util";
+import { useMe } from "../room";
 
 export const KIND_STYLE: Record<Target["kind"], string> = {
   caption: "bg-cap/15 text-cap ring-cap/30",
@@ -22,6 +23,7 @@ export function TargetChip({ target, t }: { target: Target; t?: number }) {
 }
 
 export function Composer({ target, t, onSubmit, onCancel, onFocus, compact, wide }: { target: Target; t: number; onSubmit: (text: string, want: number) => void; onCancel?: () => void; onFocus?: () => void; compact?: boolean; wide?: boolean }) {
+  const me = useMe();
   const [text, setText] = useState("");
   const [want, setWant] = useState(1);
   const ta = useRef<HTMLTextAreaElement>(null);
@@ -88,6 +90,7 @@ export function Composer({ target, t, onSubmit, onCancel, onFocus, compact, wide
           </button>
         </div>
       </div>
+      {me?.role === "commenter" && <div className="mt-1.5 text-[11px] text-ink-500">An editor approves it, then Claude makes the change.</div>}
     </div>
   );
 }

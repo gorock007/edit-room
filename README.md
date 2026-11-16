@@ -42,7 +42,28 @@ devices in your own tailnet can open. Never point `tailscale serve` at `4310`, a
 
 Anything that is not this Mac itself must log in: the password is stored only as an scrypt hash in `data/auth.json`,
 the phone gets a 30-day `HttpOnly; Secure; SameSite=Strict` session cookie, and 5 wrong tries lock login for 15
-minutes. `npm run password` again signs every device out. Turn sharing off with `tailscale serve --https=443 off`.
+minutes. `npm run password` again signs your own devices out. Turn sharing off with `tailscale serve --https=443 off`.
+
+## Working with other people
+
+**Share** (header, owner only) invites people into the room, like sharing a Google Doc:
+
+- Pick a role and whether they see **only this project** or **all projects**, then **Create link**. The link works
+  once, for 7 days; they open it, type their name, and stay in on that device for 30 days.
+- **Viewer** watches and follows the comments. **Commenter** comments too, but each comment waits as *Needs approval*
+  until an editor approves it (the agent runs commands on this Mac, so someone trusted reads every request first).
+  **Editor** works like you: comments run right away, approves others, picks options, undoes, exports. Only people
+  with all projects can start a new edit. The owner (this Mac, or your password) does everything.
+- Change a role or **Remove** someone in the same panel; a change reaches their screen at once, and removing signs
+  them out everywhere.
+- **Live room**: everyone in a project shows as an avatar in the header and as a playhead in their colour on the
+  timeline; click either to jump to where they are. Comments show who wrote them.
+- Commenters and viewers see what was asked and Claude's answers, not the agent's command log, costs or file paths.
+
+They reach this Mac the same way your phone does: over Tailscale. Share this Mac with them from the Tailscale admin
+console (Machines → ⋯ → Share), so the `https://<this-mac>…ts.net` link opens for them, on the same Wi-Fi or
+anywhere. There is no plain-Wi-Fi mode on purpose: without HTTPS anyone on the network could read their session.
+People, invites (hashed) and sessions live in `data/people.json` and `data/sessions.json`.
 
 Server code is in `server/` (projects, proxy, agent, store), the app in `src/`. Data (proxies, comments, undo
 snapshots, the password hash and sessions) lives in `data/`, outside iCloud and outside git. Every request is also

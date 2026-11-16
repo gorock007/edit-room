@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, useSocket } from "./api";
 import { SoundEngine } from "./sound";
-import type { Comment, Device, EditModel, ExportState, ProjectInfo, ProxyState, Target } from "./types";
+import { can, type Comment, type Device, type EditModel, type ExportState, type Person, type Presence, type ProjectInfo, type ProxyState, type Target } from "./types";
+import { MeContext } from "./room";
+import { Avatar, SharePanel } from "./components/People";
+import { ROLE_INFO } from "./Join";
 import { clamp, cx, fmt } from "./util";
 import { Stage, type StageHandle } from "./components/Stage";
 import { Timeline } from "./components/Timeline";
@@ -50,7 +53,14 @@ function useNarrow() {
   return m;
 }
 
-export default function App({ remote, onLogout }: { remote: boolean; onLogout: () => void }) {
+type AppProps = { me: Person & { projects: "all" | string[] }; remote: boolean; publicUrl: string | null; onMeChanged: () => void; onLogout: () => void };
+
+export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
+  const editor = can(me, "editor");
+  const commenter = can(me, "commenter");
+  const startsEdits = editor && me.projects === "all";
+  const [presence, setPresence] = useState<Presence[]>([]);
+  const [sharing, setSharing] = useState(false);
   const narrow = useNarrow();
   const [tab, setTab] = useState<"comments" | "timeline">("comments");
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
@@ -90,7 +100,7 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
   useEffect(() => {
     api.projects().then((ps) => {
       setProjects(ps);
-      if (!pid || !ps.some((p) => p.id === pid)) setPid(ps[0]?.id ?? NEW); // no edits yet: start one
+      if (!pid || !ps.some((p) => p.id === pid)) setPid(ps[0]?.id ?? (startsEdits ? NEW : null)); // no edits yet: start one
     }).catch((e) => setError(String(e.message)));
   }, []);
 
@@ -187,7 +197,10 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
     if (!compare) setListen("current");
   }, [compare]);
 
-  const online = useSocket((m) => {
+  const { online, send } = useSocket((m) => {
+    if (m.type === "presence") setPresence(m.people);
+    if (m.type === "me") onMeChanged(); // the owner changed my role or projects
+    if (m.type === "people") window.dispatchEvent(new Event("room:people"));
     if (m.type === "comment" && m.comment.project === pid) {
       setComments((cs) => {
         const prev = cs.find((c) => c.id === m.comment.id);
@@ -203,6 +216,25 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
     if (m.type === "overlay" && m.id === pid) setOverlayAt(m.at);
     if (m.type === "export" && m.id === pid) setExportSt(m.export);
   });
+
+  // tell the room where I am: the project I have open and my playhead (at most 4 times a second, the last one always)
+  const presTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const presLast = useRef(0);
+  useEffect(() => {
+    if (!online) return;
+    const msg = { type: "presence", project: pid && pid !== NEW ? pid : null, t: time, playing };
+    clearTimeout(presTimer.current);
+    const out = () => {
+      presLast.current = Date.now();
+      send(msg);
+    };
+    if (Date.now() - presLast.current > 250) out();
+    else presTimer.current = setTimeout(out, 260);
+  }, [online, pid, time, playing, send]);
+  useEffect(() => () => clearTimeout(presTimer.current), []);
+  // everyone else with this project open (my own other devices too would only be noise)
+  const others = presence.filter((x) => x.project === pid && x.id !== me.id);
+  const othersByPerson = [...new Map(others.map((o) => [o.id, o])).values()];
 
   const leader = () => players.current[0];
   const all = () => players.current.slice(0, cells.length).filter(Boolean) as StageHandle[];
@@ -282,7 +314,7 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
       if (e.key === " ") {
         e.preventDefault();
         toggle();
-      } else if ((e.key === "c" || e.key === "C") && !compare) setCommentMode((m) => !m);
+      } else if ((e.key === "c" || e.key === "C") && !compare && commenter) setCommentMode((m) => !m);
       else if (e.key === "Escape") {
         setCommentMode(false);
         setCompareId(null);
@@ -332,15 +364,24 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
   const aspect = model ? `${model.width} / ${model.height}` : "16 / 9";
   const rows = Math.ceil(cells.length / cols);
 
+  const decline = (cid: string) => {
+    if (!pid) return;
+    const reason = prompt("Decline this comment? Add a short reason if you like; they'll see it.");
+    if (reason === null) return;
+    api.decline(pid, cid, reason).catch((e) => setError(e.message));
+  };
+
   return (
+    <MeContext.Provider value={me}>
     <div className="flex h-full flex-col">
+      {sharing && <SharePanel me={me} pid={pid && pid !== NEW ? pid : null} projects={projects} onClose={() => setSharing(false)} onMeChanged={onMeChanged} />}
       <header className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-white/5 bg-ink-900 px-3 md:px-4">
         <div className="flex min-w-0 items-center gap-2 md:gap-3">
           <div className="flex items-center gap-2">
             <div className="grid h-6 w-6 place-items-center rounded-md bg-gold text-[12px] font-black text-ink-950">E</div>
-            <span className="hidden text-[13px] font-semibold tracking-tight sm:inline">Edit Room</span>
+            <span className="hidden whitespace-nowrap text-[13px] font-semibold tracking-tight lg:inline">Edit Room</span>
           </div>
-          <span className="hidden text-ink-600 sm:inline">/</span>
+          <span className="hidden text-ink-600 lg:inline">/</span>
           <select
             value={pid ?? ""}
             onChange={(e) => setPid(e.target.value)}
@@ -354,7 +395,7 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
               </option>
             ))}
           </select>
-          {pid !== NEW && (
+          {pid !== NEW && startsEdits && (
             <button
               onClick={() => setPid(NEW)}
               className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[12px] text-ink-200 ring-1 ring-white/10 hover:bg-white/5"
@@ -364,7 +405,7 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
               <span className={cx(narrow && "hidden")}>New edit</span>
             </button>
           )}
-          {model && <span className="hidden font-mono text-[11px] text-ink-500 tnum md:inline">{model.width}×{model.height} · {fmt(model.duration)}</span>}
+          {model && <span className="hidden whitespace-nowrap font-mono text-[11px] text-ink-500 tnum xl:inline">{model.width}×{model.height} · {fmt(model.duration)}</span>}
         </div>
 
         <div className="hidden md:block">
@@ -380,7 +421,38 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
         </div>
 
         <div className="flex shrink-0 items-center gap-2 text-[12px] md:gap-3">
-          {model && !portrait && pid && !pid.endsWith("v") && !projects.some((p) => p.id === `${pid}v`) && !compare && (
+          {othersByPerson.length > 0 && (
+            <div className="flex items-center -space-x-1.5" aria-label="Also here">
+              {othersByPerson.slice(0, 5).map((o) => (
+                <button
+                  key={o.id}
+                  onClick={() => seek(o.t)}
+                  className="rounded-full"
+                  title={`${o.name} (${ROLE_INFO[o.role].label.toLowerCase()}) is at ${fmt(o.t)}${o.playing ? ", playing" : ""}. Click to go there.`}
+                >
+                  <Avatar p={o} size={22} ring />
+                </button>
+              ))}
+              {othersByPerson.length > 5 && <span className="grid h-[22px] min-w-[22px] place-items-center rounded-full bg-ink-700 px-1 text-[10px] text-ink-200 ring-2 ring-ink-900">+{othersByPerson.length - 5}</span>}
+            </div>
+          )}
+          {me.role === "owner" && (
+            <button
+              onClick={() => setSharing(true)}
+              className="flex items-center gap-1.5 rounded-md bg-white/5 px-2 py-1 font-medium text-ink-100 ring-1 ring-white/10 hover:bg-white/10"
+              title="Invite people and choose what they can do"
+            >
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden><circle cx="6" cy="5.5" r="2.5" stroke="currentColor" strokeWidth="1.5" /><path d="M1.5 13.5c.6-2.4 2.3-3.6 4.5-3.6s3.9 1.2 4.5 3.6M11.5 4v5M9 6.5h5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+              <span className={cx(narrow && "hidden")}>Share</span>
+            </button>
+          )}
+          {me.role !== "owner" && (
+            <span className="flex items-center gap-1.5 text-ink-400" title={`You're in as ${me.name}, ${ROLE_INFO[me.role].label.toLowerCase()}: ${ROLE_INFO[me.role].what}`}>
+              <Avatar p={me} size={20} />
+              <span className={cx(narrow && "hidden")}>{ROLE_INFO[me.role].label}</span>
+            </span>
+          )}
+          {editor && model && !portrait && pid && !pid.endsWith("v") && !projects.some((p) => p.id === `${pid}v`) && !compare && (
             <button
               onClick={() => {
                 if (!confirm("Make a 9:16 version? Claude builds it as a separate CapCut project: new card layouts, captions and face framing. It takes a while (about 20-40 min) and the 16:9 edit stays as it is.")) return;
@@ -393,8 +465,8 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
               {narrow ? "9:16" : "Make 9:16 version"}
             </button>
           )}
-          {model && pid && pid !== NEW && <ExportMenu pid={pid} state={exportSt} busy={busy > 0} narrow={narrow} />}
-          {proxy?.status === "stale" && (
+          {model && pid && pid !== NEW && <ExportMenu pid={pid} state={exportSt} busy={busy > 0} narrow={narrow} canEdit={editor} />}
+          {editor && proxy?.status === "stale" && (
             <button onClick={() => pid && api.rebuild(pid)} className="rounded-md px-2 py-1 text-gold ring-1 ring-gold/30 hover:bg-gold/10">
               {narrow ? "Rebuild" : "Picture changed · rebuild"}
             </button>
@@ -423,9 +495,11 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
             <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-white/5 bg-ink-900/60 px-3 py-1.5 text-[12px] md:px-4">
               <span className="rounded bg-gold px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-ink-950">Compare</span>
               <span className="min-w-0 flex-1 truncate text-ink-200">“{compare.text}”</span>
-              <button onClick={() => pick("current")} className="rounded-md px-2 py-1 text-ink-300 ring-1 ring-white/10 hover:bg-white/5">
-                Keep current
-              </button>
+              {editor && (
+                <button onClick={() => pick("current")} className="rounded-md px-2 py-1 text-ink-300 ring-1 ring-white/10 hover:bg-white/5">
+                  Keep current
+                </button>
+              )}
               <button onClick={() => setCompareId(null)} className="rounded-md px-2 py-1 text-ink-400 hover:bg-white/5" title="Close (Esc); the options stay on the comment">
                 Close
               </button>
@@ -453,7 +527,7 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
                       >
                         {listen === cell.key ? "Listening" : "Listen"}
                       </button>
-                      {cell.key !== "current" && (
+                      {cell.key !== "current" && editor && (
                         <button onClick={() => pick(cell.key)} className="rounded-md bg-gold px-2 py-0.5 text-[11px] font-semibold text-ink-950 hover:brightness-110">
                           Use this
                         </button>
@@ -499,7 +573,7 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
               onError={setError}
             />
           ) : (
-            <div className="grid flex-1 place-items-center text-[13px] text-ink-400">{error ? "" : "Loading project…"}</div>
+            <div className="grid flex-1 place-items-center px-6 text-center text-[13px] text-ink-400">{error ? "" : pid ? "Loading project…" : "Nothing is shared with you yet. Ask the owner to add a project."}</div>
           )}
 
           {model && (
@@ -538,7 +612,7 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
                 <span className="hidden text-[11px] text-ink-500 xl:block">
                   <Kbd>Space</Kbd> play · <Kbd>←</Kbd><Kbd>→</Kbd> frame · <Kbd>1</Kbd><Kbd>2</Kbd><Kbd>3</Kbd> device · <Kbd>S</Kbd> safe zones
                 </span>
-                {!compare && (
+                {!compare && commenter && (
                   <button
                     onClick={() => setCommentMode(!commentMode)}
                     className={cx(
@@ -578,6 +652,7 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
                 onSolo={(s) => engine.solo(s)}
                 onSubmit={submit}
                 onFocus={setFocusId}
+                others={others}
               />
               )}
             </>
@@ -595,6 +670,8 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
           onSeek={seek}
           onStop={(id) => pid && api.stop(pid, id)}
           onUndo={(id) => pid && api.undo(pid, id).catch((e) => setError(e.message))}
+          onApprove={(id) => pid && api.approve(pid, id).catch((e) => setError(e.message))}
+          onDecline={decline}
           onSubmit={submit}
           onCompare={(id) => {
             setFocusId(id);
@@ -605,6 +682,7 @@ export default function App({ remote, onLogout }: { remote: boolean; onLogout: (
         )}
       </div>
     </div>
+    </MeContext.Provider>
   );
 }
 
@@ -615,7 +693,7 @@ function Segmented<T extends string>({ value, onChange, options }: { value: T; o
         <button
           key={v}
           onClick={() => onChange(v)}
-          className={cx("rounded-md px-3 py-1 text-[12px] font-medium transition", value === v ? "bg-ink-700 text-ink-100 shadow" : "text-ink-400 hover:text-ink-200")}
+          className={cx("whitespace-nowrap rounded-md px-3 py-1 text-[12px] font-medium transition", value === v ? "bg-ink-700 text-ink-100 shadow" : "text-ink-400 hover:text-ink-200")}
           title={`${label} (${key})`}
         >
           {label}

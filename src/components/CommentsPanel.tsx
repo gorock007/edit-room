@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import type { Comment, Target } from "../types";
+import { can, type Comment, type Target } from "../types";
 import { ago, basename, cx, fmt } from "../util";
+import { useMe } from "../room";
 import { Composer, TargetChip } from "./Composer";
+import { Avatar } from "./People";
 
 type Props = {
   comments: Comment[];
@@ -11,6 +13,8 @@ type Props = {
   onSeek: (t: number) => void;
   onStop: (id: string) => void;
   onUndo: (id: string) => void;
+  onApprove: (id: string) => void;
+  onDecline: (id: string) => void;
   onSubmit: (c: { text: string; t: number; x: null; y: null; target: Target; want: number }) => void;
   onCompare: (id: string) => void;
   /** phone layout: full width, scrolls with the page */
@@ -20,17 +24,33 @@ type Props = {
 };
 
 export function CommentsPanel(p: Props) {
-  const list = [...p.comments].sort((a, b) => b.createdAt - a.createdAt);
+  const me = useMe();
+  const editor = can(me, "editor");
+  const waiting = p.comments.filter((c) => c.status === "pending");
+  const [onlyWaiting, setOnlyWaiting] = useState(false);
+  const show = onlyWaiting && waiting.length ? waiting : p.comments;
+  const list = [...show].sort((a, b) => b.createdAt - a.createdAt);
   const working = p.comments.filter((c) => c.status === "working" || c.status === "queued").length;
   // the moment you start typing is the comment's time, not the moment you press Send (the video may be playing)
   const [at, setAt] = useState<number | null>(null);
   return (
     <aside className={cx("flex shrink-0 flex-col bg-ink-900", p.full ? "w-full" : "w-[320px] border-l border-white/5 xl:w-[380px]")}>
-      <div className="flex h-11 items-center justify-between border-b border-white/5 px-4">
+      <div className="flex h-11 items-center justify-between gap-2 border-b border-white/5 px-4">
         <div className="text-[13px] font-semibold text-ink-100">Comments</div>
-        <div className="text-[11px] text-ink-400">{working ? `${working} in progress` : `${p.comments.length} total`}</div>
+        <div className="flex items-center gap-2 text-[11px] text-ink-400">
+          {waiting.length > 0 && (
+            <button
+              onClick={() => setOnlyWaiting(!onlyWaiting)}
+              className={cx("rounded-md px-1.5 py-0.5 font-semibold ring-1", onlyWaiting ? "bg-gold text-ink-950 ring-gold" : "text-gold ring-gold/30 hover:bg-gold/10")}
+              title={onlyWaiting ? "Show every comment" : "Show only comments waiting for approval"}
+            >
+              {waiting.length} to approve
+            </button>
+          )}
+          <span>{working ? `${working} in progress` : `${p.comments.length} total`}</span>
+        </div>
       </div>
-      {!p.noComposer && <div className="border-b border-white/5 p-3">
+      {!p.noComposer && can(me, "commenter") && <div className="border-b border-white/5 p-3">
         <Composer
           compact
           target={{ kind: "general", label: "whole video" }}
@@ -45,18 +65,20 @@ export function CommentsPanel(p: Props) {
       <div className={cx("space-y-2 p-3", !p.full && "flex-1 overflow-y-auto")}>
         {list.length === 0 && !p.noComposer && (
           <div className="mt-10 px-6 text-center text-[13px] leading-relaxed text-ink-400">
-            {p.full ? "Tap Comment, then tap anything in the frame to ask for a change. Claude starts on it the moment you send." : <>Press <Kbd>C</Kbd> and click anything in the frame or on the timeline to ask for a change. Claude starts on it the moment you send.</>}
+            {!can(me, "commenter") ? "No comments yet. You can watch the edit and follow the comments here." :
+              p.full ? "Tap Comment, then tap anything in the frame to ask for a change." : <>Press <Kbd>C</Kbd> and click anything in the frame or on the timeline to ask for a change.</>}
+            {editor && " Claude starts on it the moment you send."}
           </div>
         )}
         {list.map((c) => (
-          <Card key={c.id} c={c} focused={p.focusId === c.id} {...p} />
+          <Card key={c.id} c={c} focused={p.focusId === c.id} editor={editor} mine={(c.author?.id ?? "owner") === me?.id} {...p} />
         ))}
       </div>
     </aside>
   );
 }
 
-function Card({ c, focused, onFocus, onSeek, onStop, onUndo, onCompare }: { c: Comment; focused: boolean } & Props) {
+function Card({ c, focused, editor, mine, onFocus, onSeek, onStop, onUndo, onApprove, onDecline, onCompare }: { c: Comment; focused: boolean; editor: boolean; mine: boolean } & Props) {
   const ref = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   useEffect(() => {
@@ -65,6 +87,7 @@ function Card({ c, focused, onFocus, onSeek, onStop, onUndo, onCompare }: { c: C
   const live = c.status === "working" || c.status === "queued";
   const steps = c.activity.filter((a) => a.kind !== "text");
   const latest = [...c.activity].reverse().find((a) => a.kind === "tool" || a.kind === "info");
+  const author = c.author ?? null;
   return (
     <div
       ref={ref}
@@ -74,8 +97,8 @@ function Card({ c, focused, onFocus, onSeek, onStop, onUndo, onCompare }: { c: C
       }}
       className={cx(
         "relative cursor-pointer overflow-hidden rounded-xl bg-ink-850 p-3 ring-1 transition",
-        focused ? "ring-gold/50" : "ring-white/5 hover:ring-white/10",
-        c.status === "undone" && "opacity-55",
+        focused ? "ring-gold/50" : c.status === "pending" ? "ring-gold/25 hover:ring-gold/40" : "ring-white/5 hover:ring-white/10",
+        (c.status === "undone" || c.status === "declined") && "opacity-55",
       )}
     >
       {c.status === "working" && <div className="shimmer pointer-events-none absolute inset-0" />}
@@ -84,7 +107,41 @@ function Card({ c, focused, onFocus, onSeek, onStop, onUndo, onCompare }: { c: C
           <TargetChip target={c.target} t={c.t} />
           <StatusBadge c={c} />
         </div>
-        <p className="text-[13px] leading-snug text-ink-100">{c.text}</p>
+        <div className="flex gap-2">
+          {author && <span className="mt-0.5"><Avatar p={author} size={18} /></span>}
+          <p className="min-w-0 text-[13px] leading-snug text-ink-100">
+            {author && <span className="mr-1 font-semibold" style={{ color: author.color }}>{mine ? "You" : author.name}</span>}
+            {c.text}
+          </p>
+        </div>
+
+        {c.status === "pending" && (
+          editor ? (
+            <div className="mt-2.5 flex gap-1.5">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onApprove(c.id);
+                }}
+                className="flex-1 rounded-lg bg-gold py-1.5 text-[12px] font-semibold text-ink-950 hover:brightness-110"
+                title="Claude starts on it now"
+              >
+                Approve
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDecline(c.id);
+                }}
+                className="rounded-lg px-3 py-1.5 text-[12px] text-ink-200 ring-1 ring-white/10 hover:bg-white/5"
+              >
+                Decline
+              </button>
+            </div>
+          ) : (
+            <div className="mt-2 text-[12px] text-ink-400">Waiting for an editor to approve it</div>
+          )
+        )}
 
         {live && (
           <div className="mt-2 flex items-center gap-2 text-[12px] text-ink-300">
@@ -110,7 +167,7 @@ function Card({ c, focused, onFocus, onSeek, onStop, onUndo, onCompare }: { c: C
                 }}
                 className="mt-1.5 w-full rounded-lg bg-gold py-1.5 text-[12px] font-semibold text-ink-950 hover:brightness-110"
               >
-                Compare side by side
+                {editor ? "Compare side by side" : "See the options side by side"}
               </button>
             )}
             {c.chosen && <div className="pt-1 text-[11px] text-ink-500">{c.chosen === "current" ? "Kept the current version" : `Using option ${c.chosen}`}</div>}
@@ -119,7 +176,7 @@ function Card({ c, focused, onFocus, onSeek, onStop, onUndo, onCompare }: { c: C
 
         {c.reply && !live && (
           <div className="mt-2.5 flex gap-2">
-            <div className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-gold text-[10px] font-bold text-ink-950">C</div>
+            {c.status === "declined" ? null : <div className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-gold text-[10px] font-bold text-ink-950">C</div>}
             <p className="text-[13px] leading-snug text-ink-200">{c.reply}</p>
           </div>
         )}
@@ -127,6 +184,8 @@ function Card({ c, focused, onFocus, onSeek, onStop, onUndo, onCompare }: { c: C
         <div className="mt-2.5 flex items-center justify-between">
           <div className="flex items-center gap-3 text-[11px] text-ink-500">
             <span>{ago(c.createdAt)}</span>
+            {c.approvedBy && c.status !== "declined" && c.status !== "pending" && <span>approved by {c.approvedBy}</span>}
+            {c.status === "declined" && c.approvedBy && <span>declined by {c.approvedBy}</span>}
             {steps.length > 0 && (
               <button
                 className="hover:text-ink-200"
@@ -138,19 +197,15 @@ function Card({ c, focused, onFocus, onSeek, onStop, onUndo, onCompare }: { c: C
                 {open ? "Hide" : "Show"} {steps.length} steps
               </button>
             )}
-            {c.changed && c.changed.length > 0 && c.status !== "undone" && (
+            {editor && c.changed && c.changed.length > 0 && c.status !== "undone" && (
               <span title={c.changed.join("\n")}>{c.changed.length} file{c.changed.length > 1 ? "s" : ""} changed</span>
             )}
           </div>
           <div className="flex gap-1">
-            {live && (
-              <SmallBtn
-                onClick={() => onStop(c.id)}
-              >
-                Stop
-              </SmallBtn>
-            )}
-            {!live && c.status !== "undone" && (c.changed?.length ?? 0) > 0 && <SmallBtn onClick={() => onUndo(c.id)}>Undo</SmallBtn>}
+            {(live && editor) || ((live || c.status === "pending") && mine && c.status !== "working") ? (
+              <SmallBtn onClick={() => onStop(c.id)}>{mine && c.status !== "working" ? "Withdraw" : "Stop"}</SmallBtn>
+            ) : null}
+            {editor && !live && c.status !== "undone" && (c.changed?.length ?? 0) > 0 && <SmallBtn onClick={() => onUndo(c.id)}>Undo</SmallBtn>}
           </div>
         </div>
 
@@ -162,7 +217,7 @@ function Card({ c, focused, onFocus, onSeek, onStop, onUndo, onCompare }: { c: C
                 <span className="break-words">{a.text}</span>
               </li>
             ))}
-            {c.changed?.map((f) => (
+            {editor && c.changed?.map((f) => (
               <li key={f} className="text-sfx/80">
                 changed {basename(f)}
               </li>
@@ -176,6 +231,8 @@ function Card({ c, focused, onFocus, onSeek, onStop, onUndo, onCompare }: { c: C
 
 function StatusBadge({ c }: { c: Comment }) {
   const map: Record<Comment["status"], [string, string]> = {
+    pending: ["Needs approval", "text-gold bg-gold/10 ring-1 ring-gold/30"],
+    declined: ["Declined", "text-ink-400 bg-white/5"],
     queued: ["Queued", "text-ink-400 bg-white/5"],
     working: ["Working", "text-gold bg-gold/10"],
     review: ["Pick one", "text-ink-950 bg-gold"],

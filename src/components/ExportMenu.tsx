@@ -8,7 +8,7 @@ const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).jo
  * Export for Instagram Reels and TikTok: one upload-ready MP4 made straight from the CapCut draft (1080x1920 H.264,
  * AAC 320k, -14 LUFS). The state comes from the server (live over the socket), so a phone sees an export the Mac started.
  */
-export function ExportMenu({ pid, state, busy, narrow }: { pid: string; state: ExportState | null; busy: boolean; narrow: boolean }) {
+export function ExportMenu({ pid, state, busy, narrow, canEdit = true }: { pid: string; state: ExportState | null; busy: boolean; narrow: boolean; canEdit?: boolean }) {
   const [open, setOpen] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
@@ -77,7 +77,8 @@ export function ExportMenu({ pid, state, busy, narrow }: { pid: string; state: E
           {st === "failed" && <div className="mt-3 whitespace-pre-wrap break-words rounded-md bg-red-500/10 px-2 py-1.5 text-red-300">{state?.error}</div>}
           {err && <div className="mt-3 rounded-md bg-red-500/10 px-2 py-1.5 text-red-300">{err}</div>}
 
-          {!running && (
+          {!running && !canEdit && st !== "ready" && <div className="mt-3 text-ink-400">No export yet. An editor can make one.</div>}
+          {!running && canEdit && (
             <button
               onClick={start}
               disabled={busy}
@@ -89,7 +90,7 @@ export function ExportMenu({ pid, state, busy, narrow }: { pid: string; state: E
               {st === "none" ? "Export" : st === "failed" ? "Try again" : "Export again"}
             </button>
           )}
-          {busy && !running && <div className="mt-1 text-center text-[11px] text-ink-500">Wait for Claude to finish editing.</div>}
+          {canEdit && busy && !running && <div className="mt-1 text-center text-[11px] text-ink-500">Wait for Claude to finish editing.</div>}
 
           <div className="mt-4 border-t border-white/5 pt-3 text-[11px] leading-relaxed text-ink-400">
             <div className="mb-1 font-medium text-ink-300">To keep the quality when you post</div>
