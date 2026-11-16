@@ -99,7 +99,7 @@ export function Timeline(p: Props) {
     if (key === "picture") {
       const b = p.model.broll.find(inSeg), c = p.model.cuts.find(inSeg);
       if (b) target = { kind: "broll", id: b.id, label: `card "${b.label}"`, detail: `${b.start.toFixed(2)}–${(b.start + b.dur).toFixed(2)} s` };
-      else if (c) target = { kind: "cut", id: c.id, label: `A-roll ${c.id}`, detail: `${c.start.toFixed(2)}–${(c.start + c.dur).toFixed(2)} s${c.scale !== 1 ? ` · punch-in ${c.scale}×` : ""}` };
+      else if (c) target = { kind: "cut", id: c.id, label: `A-roll ${c.id}`, detail: `${c.start.toFixed(2)}–${(c.start + c.dur).toFixed(2)} s${c.scale !== 1 ? ` · punch-in ${+c.scale.toFixed(2)}×` : ""}` };
     } else if (key === "captions") {
       const g = p.model.captions.find(inSeg);
       if (g) target = { kind: "caption", id: g.id, label: `caption ${g.id} "${g.text}"`, detail: g.big ? `keyword "${g.big}"` : undefined };
@@ -174,7 +174,7 @@ export function Timeline(p: Props) {
                     {p.model.cuts.map((s) => (
                       <button
                         key={s.id}
-                        onClick={(e) => choose({ kind: "cut", id: s.id, label: `A-roll ${s.id}`, detail: `${s.start.toFixed(2)}–${(s.start + s.dur).toFixed(2)} s${s.scale !== 1 ? ` · punch-in ${s.scale}×` : ""}` }, s.start, li, clickT(e, s.start))}
+                        onClick={(e) => choose({ kind: "cut", id: s.id, label: `A-roll ${s.id}`, detail: `${s.start.toFixed(2)}–${(s.start + s.dur).toFixed(2)} s${s.scale !== 1 ? ` · punch-in ${+s.scale.toFixed(2)}×` : ""}` }, s.start, li, clickT(e, s.start))}
                         className={cx("absolute top-1.5 bottom-1.5 rounded-[3px] border-r border-ink-900 transition-colors", s.scale !== 1 ? "bg-cut/45 hover:bg-cut/60" : "bg-cut/25 hover:bg-cut/40")}
                         style={{ left: x(s.start), width: Math.max(2, x(s.dur)) }}
                         title={`${s.id} · ${s.dur.toFixed(2)} s${s.scale !== 1 ? ` · ${s.scale}×` : ""}`}

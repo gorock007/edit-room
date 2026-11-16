@@ -1,16 +1,17 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { ROLE_INFO } from "../Join";
-import type { Invite, Person, PersonFull, ProjectInfo, Role } from "../types";
+import type { Invite, McpUrls, Person, PersonFull, ProjectInfo, Role } from "../types";
 import { cx } from "../util";
 
-export function Avatar({ p, size = 24, ring }: { p: Pick<Person, "name" | "color">; size?: number; ring?: boolean }) {
+/** People are round; agents are square, so you can tell at a glance who is a person. */
+export function Avatar({ p, size = 24, ring }: { p: Pick<Person, "name" | "color" | "kind">; size?: number; ring?: boolean }) {
   const initials = p.name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("") || "?";
   return (
     <span
-      className={cx("grid shrink-0 place-items-center rounded-full font-bold text-ink-950", ring && "ring-2 ring-ink-900")}
+      className={cx("grid shrink-0 place-items-center font-bold text-ink-950", p.kind === "agent" ? "rounded-[28%]" : "rounded-full", ring && "ring-2 ring-ink-900")}
       style={{ width: size, height: size, background: p.color, fontSize: Math.round(size * 0.42) }}
-      title={p.name}
+      title={p.kind === "agent" ? `${p.name} (agent)` : p.name}
     >
       {initials}
     </span>
@@ -33,6 +34,11 @@ export function SharePanel({ me, pid, projects, onClose, onMeChanged }: { me: Pe
   const [copied, setCopied] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [name, setName] = useState(me.name);
+  // connect an agent
+  const [agentName, setAgentName] = useState("");
+  const [agentRole, setAgentRole] = useState<Role>("commenter");
+  const [agentScope, setAgentScope] = useState<"this" | "all">(pid ? "this" : "all");
+  const [made, setMade] = useState<{ name: string; key: string; mcp: McpUrls } | null>(null);
 
   const load = () =>
     api.people().then((r) => {
@@ -40,6 +46,18 @@ export function SharePanel({ me, pid, projects, onClose, onMeChanged }: { me: Pe
       setOpen(r.invites);
       setPublicUrl(r.publicUrl);
     }).catch((e) => setErr(e.message));
+
+  const connect = async () => {
+    setErr(null);
+    try {
+      const r = await api.connectAgent(agentName.trim() || "Agent", agentRole, agentScope === "this" && pid ? [pid] : "all");
+      setMade({ name: r.person.name, key: r.key, mcp: r.mcp });
+      setAgentName("");
+      load();
+    } catch (e: any) {
+      setErr(e.message);
+    }
+  };
   useEffect(() => {
     load();
     const close = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -122,8 +140,34 @@ export function SharePanel({ me, pid, projects, onClose, onMeChanged }: { me: Pe
           )}
         </div>
 
+        {/* agents */}
+        <div className="mt-3 rounded-xl bg-ink-850 p-3 ring-1 ring-white/5">
+          <div className="mb-2 text-[12px] font-medium text-ink-300">Connect an agent</div>
+          <p className="mb-2 text-[11px] leading-relaxed text-ink-500">
+            Claude Code, Codex or any agent that speaks MCP joins the room with its own key: it reads the timeline, looks at frames and leaves comments, under the same role and approvals as a person.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <input
+              value={agentName}
+              maxLength={40}
+              onChange={(e) => setAgentName(e.target.value)}
+              placeholder="Name (e.g. Codex)"
+              className="min-w-0 flex-1 basis-[120px] rounded-md bg-ink-950 px-2 py-1.5 text-[16px] text-ink-100 ring-1 ring-white/10 placeholder:text-ink-500 md:text-[12px]"
+            />
+            <select value={agentRole} onChange={(e) => setAgentRole(e.target.value as Role)} className="rounded-md bg-ink-950 px-2 py-1.5 text-[16px] ring-1 ring-white/10 md:text-[12px]">
+              {INVITABLE.map((r) => <option key={r} value={r}>{ROLE_INFO[r].label}</option>)}
+            </select>
+            <select value={agentScope} onChange={(e) => setAgentScope(e.target.value as "this" | "all")} className="rounded-md bg-ink-950 px-2 py-1.5 text-[16px] ring-1 ring-white/10 md:text-[12px]">
+              {pid && <option value="this">Only {thisName}</option>}
+              <option value="all">All projects</option>
+            </select>
+            <button onClick={connect} className="rounded-md bg-gold px-3 py-1.5 text-[12px] font-semibold text-ink-950 hover:brightness-110">Connect</button>
+          </div>
+          {made && <AgentKey made={made} onError={setErr} />}
+        </div>
+
         {/* people */}
-        <div className="mt-4 text-[12px] font-medium text-ink-300">People</div>
+        <div className="mt-4 text-[12px] font-medium text-ink-300">People and agents</div>
         <ul className="mt-2 divide-y divide-white/5">
           {list.map((p) => (
             <li key={p.id} className="flex items-center gap-3 py-2.5">
@@ -143,7 +187,7 @@ export function SharePanel({ me, pid, projects, onClose, onMeChanged }: { me: Pe
                   <div className="truncate px-1 text-[13px] font-medium text-ink-100">{p.name}</div>
                 )}
                 <div className="truncate px-1 text-[11px] text-ink-500">
-                  {p.id === me.id ? "You · " : ""}{p.projects === "all" ? "All projects" : p.projects.map(projName).join(", ")}
+                  {p.id === me.id ? "You · " : p.kind === "agent" ? "Agent · " : ""}{p.projects === "all" ? "All projects" : p.projects.map(projName).join(", ")}
                 </div>
               </div>
               {p.role === "owner" ? (
@@ -159,7 +203,10 @@ export function SharePanel({ me, pid, projects, onClose, onMeChanged }: { me: Pe
                     {INVITABLE.map((r) => <option key={r} value={r}>{ROLE_INFO[r].label}</option>)}
                   </select>
                   <button
-                    onClick={() => confirm(`Remove ${p.name}? They're signed out on every device right away.`) && act(api.removePerson(p.id))}
+                    onClick={() =>
+                      confirm(p.kind === "agent" ? `Disconnect ${p.name}? Its key stops working right away.` : `Remove ${p.name}? They're signed out on every device right away.`) &&
+                      act(api.removePerson(p.id))
+                    }
                     className="rounded-md px-1.5 py-1 text-[12px] text-ink-500 hover:bg-red-500/10 hover:text-red-300"
                     title="Remove from the room"
                   >
@@ -172,6 +219,56 @@ export function SharePanel({ me, pid, projects, onClose, onMeChanged }: { me: Pe
         </ul>
         {err && <p className="mt-3 rounded-md bg-red-500/10 px-2 py-1.5 text-[12px] text-red-300">{err}</p>}
       </div>
+    </div>
+  );
+}
+
+/** A new agent's key, shown this once, ready to paste into the agent's MCP settings. */
+function AgentKey({ made, onError }: { made: { name: string; key: string; mcp: McpUrls }; onError: (e: string) => void }) {
+  const [where, setWhere] = useState<"local" | "remote">("local");
+  const [copied, setCopied] = useState<string | null>(null);
+  const url = where === "remote" && made.mcp.remote ? made.mcp.remote : made.mcp.local;
+  const slug = made.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "agent";
+  const claude = `claude mcp add --transport http edit-room ${url} --header "Authorization: Bearer ${made.key}"`;
+  const json = JSON.stringify({ mcpServers: { "edit-room": { type: "http", url, headers: { Authorization: `Bearer ${made.key}` } } } }, null, 2);
+  const copy = async (what: string, s: string) => {
+    try {
+      await navigator.clipboard.writeText(s);
+      setCopied(what);
+    } catch {
+      onError("Couldn't copy; select the text and copy it by hand.");
+    }
+  };
+  const Block = ({ id, label, text }: { id: string; label: string; text: string }) => (
+    <div>
+      <div className="mb-1 flex items-center justify-between text-[11px] text-ink-400">
+        <span>{label}</span>
+        <button onClick={() => copy(id, text)} className="rounded px-1.5 py-0.5 text-ink-200 ring-1 ring-white/10 hover:bg-white/5">{copied === id ? "Copied" : "Copy"}</button>
+      </div>
+      <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-ink-950 p-2 font-mono text-[10.5px] leading-snug text-ink-100 ring-1 ring-white/10">{text}</pre>
+    </div>
+  );
+  return (
+    <div className="mt-3 space-y-2.5" data-agent={slug}>
+      <p className="rounded-md bg-gold/10 px-2 py-1.5 text-[11px] leading-relaxed text-gold">
+        {made.name}'s key is shown only now. Paste it into the agent's settings; if it's lost, disconnect the agent and connect it again.
+      </p>
+      <div className="flex rounded-md bg-ink-950 p-0.5 text-[11px] ring-1 ring-white/5">
+        {(["local", "remote"] as const).map((w) => (
+          <button
+            key={w}
+            disabled={w === "remote" && !made.mcp.remote}
+            onClick={() => setWhere(w)}
+            className={cx("flex-1 rounded px-2 py-1 disabled:opacity-40", where === w ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-200")}
+            title={w === "remote" && !made.mcp.remote ? "Run npm run phone to share this Mac on Tailscale first" : undefined}
+          >
+            {w === "local" ? "Agent on this Mac" : "Agent on another machine"}
+          </button>
+        ))}
+      </div>
+      <Block id="claude" label="Claude Code: run this in a terminal" text={claude} />
+      <Block id="json" label="Other agents: MCP settings (Streamable HTTP)" text={json} />
+      {where === "remote" && <p className="text-[11px] leading-relaxed text-ink-500">The other machine must be on your Tailscale network (or this Mac shared with it).</p>}
     </div>
   );
 }

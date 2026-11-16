@@ -69,6 +69,27 @@ console (Machines → ⋯ → Share), so the `https://<this-mac>…ts.net` link 
 anywhere. There is no plain-Wi-Fi mode on purpose: without HTTPS anyone on the network could read their session.
 People, invites (hashed) and sessions live in `data/people.json` and `data/sessions.json`.
 
+## Agents (MCP)
+
+Other agents join the room like people do. Edit Room is an MCP server at `/mcp` (Streamable HTTP): **Share → Connect
+an agent**, give it a name, role and projects, and paste the command it shows into the agent (the key is shown once):
+
+```bash
+claude mcp add --transport http edit-room http://127.0.0.1:4310/mcp --header "Authorization: Bearer er_…"
+```
+
+Any MCP client works the same way (URL plus that `Authorization` header). An agent on another machine uses
+`https://<this-mac>…ts.net/mcp` over Tailscale. Tools: `whoami`, `list_projects`, `get_edit` (the timeline with ids),
+`look_at_frame` (a still at a time), `list_comments`, `get_comment` (with `wait_seconds` to follow one), `add_comment`
+(point at a caption, cut, card or sound by id, or a time; ask for 2-3 options), `approve_comment`, `decline_comment`,
+`pick_option`, `undo_comment`, `stop_comment`, `export_video`.
+
+An agent never edits files itself: it comments, and Edit Room's own Claude makes each change. It has a person's role and
+project limits and goes through the same room actions (`server/room.ts`), so a commenter agent's comments wait for
+approval and a viewer agent only reads. Its avatar is square, it shows in the room while it works (its playhead at the
+moment it is looking at) and its comments say "agent". Every request is checked against its key (only a hash is kept;
+never a browser cookie), so **Remove** in Share stops it at once.
+
 Server code is in `server/` (projects, proxy, agent, store), the app in `src/`. Data (proxies, comments, undo
 snapshots, the password hash and sessions) lives in `data/`, outside iCloud and outside git. Every request is also
 checked for its Host and Origin, so other websites open in your browser can't reach the server. A comment makes the

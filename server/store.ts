@@ -13,7 +13,7 @@ export type Activity = { at: number; kind: "tool" | "text" | "info" | "error"; t
 // pending = a commenter's comment waiting for an editor to approve it; declined = an editor said no
 export type CommentStatus = "pending" | "declined" | "queued" | "working" | "review" | "done" | "failed" | "stopped" | "undone";
 /** Who wrote a comment (a copy, so it still reads right after the person is renamed or removed). No author = the owner. */
-export type Author = { id: string; name: string; color: string; role: string };
+export type Author = { id: string; name: string; color: string; role: string; kind?: "agent" };
 export type Option = { key: string; note: string; files: string[]; pictureChanged: boolean; picture?: "building" | "ready" | "failed" };
 export type Comment = {
   id: string;

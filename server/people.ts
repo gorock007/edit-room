@@ -15,7 +15,11 @@ import { AUTH_DIR } from "./config.ts";
  */
 export type Role = "owner" | "editor" | "commenter" | "viewer";
 export const ROLES: Role[] = ["viewer", "commenter", "editor", "owner"];
-export type Person = { id: string; name: string; role: Role; color: string; projects: "all" | string[]; createdAt: number };
+/**
+ * An agent (Claude Code, Codex, a script…) is a person too, with the same roles and project limits. It has no
+ * browser login: it calls the MCP endpoint with a secret key (stored only as a hash) that the owner made for it.
+ */
+export type Person = { id: string; name: string; role: Role; color: string; projects: "all" | string[]; createdAt: number; kind?: "agent"; keyHash?: string };
 type Invite = { hash: string; role: Exclude<Role, "owner">; projects: "all" | string[]; by: string; createdAt: number; expires: number };
 type File = { people: Person[]; invites: Invite[] };
 
@@ -55,8 +59,41 @@ export const can = (p: Person | undefined, role: Role) => !!p && ROLES.indexOf(p
 export const canSee = (p: Person | undefined, projectId: string) =>
   !!p && (p.projects === "all" || p.projects.includes(projectId) || p.projects.includes(projectId.replace(/v$/, "")));
 
-/** What other people see of a person (no join time, no project list). */
-export const publicPerson = (p: Person) => ({ id: p.id, name: p.name, role: p.role, color: p.color });
+/** What other people see of a person (no join time, no project list, never the key hash). */
+export const publicPerson = (p: Person) => ({ id: p.id, name: p.name, role: p.role, color: p.color, ...(p.kind ? { kind: p.kind } : {}) });
+/** What the owner's Share panel gets: everything but the key hash. */
+export const ownerView = ({ keyHash: _k, ...p }: Person) => p;
+
+const pickColor = () => {
+  const used = new Set(data.people.map((p) => p.color));
+  return COLORS.find((c) => !used.has(c)) ?? COLORS[data.people.length % COLORS.length];
+};
+
+/** Connect an agent: a new person of kind "agent" and its key, shown to the owner once (only its hash is kept). */
+export function createAgent(name: unknown, role: unknown, projects: unknown): { person: Person; key: string } {
+  if (!["viewer", "commenter", "editor"].includes(String(role))) throw new Error("pick viewer, commenter or editor");
+  const key = "er_" + crypto.randomBytes(32).toString("base64url");
+  const person: Person = {
+    id: crypto.randomBytes(6).toString("hex"),
+    name: cleanName(name) || "Agent",
+    role: role as Role,
+    color: pickColor(),
+    projects: cleanProjects(projects),
+    createdAt: Date.now(),
+    kind: "agent",
+    keyHash: sha(key),
+  };
+  data.people.push(person);
+  save();
+  return { person, key };
+}
+
+/** The agent a key belongs to (a removed agent's key stops working at once). */
+export function agentByKey(key: string): Person | undefined {
+  if (!key.startsWith("er_") || key.length > 100) return;
+  const h = sha(key);
+  return data.people.find((p) => p.kind === "agent" && p.keyHash === h);
+}
 
 export const cleanName = (s: unknown) => String(s ?? "").replace(/[\u0000-\u001f\u007f<>]/g, "").replace(/\s+/g, " ").trim().slice(0, 40);
 
@@ -85,12 +122,11 @@ export function redeemInvite(token: string, name: string): Person | null {
   if (i < 0) return null;
   const inv = data.invites[i];
   data.invites.splice(i, 1);
-  const used = new Set(data.people.map((p) => p.color));
   const person: Person = {
     id: crypto.randomBytes(6).toString("hex"),
     name: cleanName(name) || "Guest",
     role: inv.role,
-    color: COLORS.find((c) => !used.has(c)) ?? COLORS[data.people.length % COLORS.length],
+    color: pickColor(),
     projects: inv.projects,
     createdAt: Date.now(),
   };

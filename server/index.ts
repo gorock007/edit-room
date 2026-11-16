@@ -4,20 +4,21 @@ import http from "node:http";
 import express from "express";
 import { WebSocketServer, WebSocket } from "ws";
 import chokidar, { type FSWatcher } from "chokidar";
-import os from "node:os";
-import { ALLOWED_HOSTS, ALLOWED_ORIGINS, CAPCUT_DRAFTS, DATA_DIR, HOST, PORT, PUBLIC_HOSTS, READ_ROOTS, REMOTE_PORT, SKILL_DIR, VIDEO_ROOT, inside } from "./config.ts";
+import { ALLOWED_HOSTS, ALLOWED_ORIGINS, HOST, PORT, PUBLIC_HOSTS, READ_ROOTS, REMOTE_PORT, inside } from "./config.ts";
 import { getProject, listProjects, readModel, type Project } from "./projects.ts";
 import { buildProxy, proxyFile, proxyState } from "./proxy.ts";
-import { exportFile, exportName, exportState, startExport } from "./exporter.ts";
-import { enqueue, quiet, stop } from "./agent.ts";
-import { KEYS, applyOption, hasOption, optionProject } from "./options.ts";
+import { exportFile, exportName, exportState } from "./exporter.ts";
+import { enqueue, quiet } from "./agent.ts";
+import { KEYS, hasOption, optionProject } from "./options.ts";
 import { dropSessions, hasPassword, isRemote, login, logout, needsLogin, personOf, startSession } from "./auth.ts";
 import {
-  OWNER, can, canSee, cancelInvites, cleanName, createInvite, getPerson, invites, peekInvite, people, publicPerson, redeemInvite,
-  removePerson, updatePerson, type Person, type Role,
+  OWNER, can, canSee, cancelInvites, cleanName, createAgent, createInvite, getPerson, invites, ownerView, peekInvite, people,
+  publicPerson, redeemInvite, removePerson, updatePerson, type Person, type Role,
 } from "./people.ts";
-import { loadComments, newId, restore, saveComments, updateComment, type Author, type Comment } from "./store.ts";
+import { loadComments, newId, saveComments, type Comment } from "./store.ts";
 import { MAX_CHUNK, newEditFolder, putChunk, rawDir, rawInfo, saveNote, startUpload } from "./uploads.ts";
+import { RoomError, authorOf, makeRoom, runsDirectly, viewOf } from "./room.ts";
+import { mcpHandler } from "./mcp.ts";
 
 const app = express();
 app.set("case sensitive routing", true); // "/API/..." must not reach a route the login gate didn't recognise
@@ -34,8 +35,9 @@ app.use(express.json({ limit: "1mb" }));
 
 // ---- login: needed by anything that is not this Mac (the phone, invited people; all over Tailscale) ----
 // Deny by default: without a session a remote device gets the login/join endpoints and the app's own built files, nothing else.
+// /mcp checks the agent's own key on every request (never a browser cookie), on both ports.
 const dist = path.resolve(import.meta.dirname, "../dist");
-const OPEN_API = new Set(["GET /api/me", "POST /api/login", "POST /api/logout", "POST /api/invite", "POST /api/join"]);
+const OPEN_API = new Set(["GET /api/me", "POST /api/login", "POST /api/logout", "POST /api/invite", "POST /api/join", "POST /mcp", "GET /mcp", "DELETE /mcp"]);
 const isAppFile = (p: string) => {
   if (p === "/" || p === "/index.html" || p === "/join") return true; // /join is the invite page (the app itself)
   try {
@@ -58,7 +60,8 @@ const need = (role: Role): express.RequestHandler => (req, res, next) =>
   can(personOf(req) ?? undefined, role) ? next() : res.status(403).json({ error: `Only ${ROLE_WORD[role]} can do that.` });
 
 const publicUrl = () => (PUBLIC_HOSTS[0] ? `https://${PUBLIC_HOSTS[0]}` : null);
-const authorOf = (p: Person): Author => ({ id: p.id, name: p.name, color: p.color, role: p.role });
+/** Where agents connect: on this Mac, and over Tailscale. */
+const mcpUrls = () => ({ local: `http://127.0.0.1:${PORT}/mcp`, remote: publicUrl() ? `${publicUrl()}/mcp` : null });
 
 app.get("/api/me", (req, res) => {
   const p = personOf(req);
@@ -107,7 +110,9 @@ app.post("/api/join", (req, res) => {
 });
 
 // ---- people: the owner decides who is in the room and what they may do ----
-app.get("/api/people", need("owner"), (_req, res) => res.json({ people: people(), invites: invites(), publicUrl: publicUrl() }));
+app.get("/api/people", need("owner"), (_req, res) =>
+  res.json({ people: people().map(ownerView), invites: invites(), publicUrl: publicUrl(), mcp: mcpUrls() }),
+);
 app.post("/api/people/invites", need("owner"), (req, res) => {
   try {
     const { token, expires } = createInvite(me(req), req.body?.role, req.body?.projects);
@@ -121,12 +126,22 @@ app.delete("/api/people/invites", need("owner"), (_req, res) => {
   cancelInvites();
   res.json({ ok: true });
 });
+// connect an agent: its key is shown this once; only a hash is kept
+app.post("/api/people/agents", need("owner"), (req, res) => {
+  try {
+    const { person, key } = createAgent(req.body?.name, req.body?.role, req.body?.projects);
+    peopleChanged();
+    res.json({ person: ownerView(person), key, mcp: mcpUrls() });
+  } catch (e: any) {
+    res.status(400).json({ error: String(e?.message ?? e) });
+  }
+});
 app.patch("/api/people/:pid", need("owner"), (req, res) => {
   try {
     const p = updatePerson(String(req.params.pid), { name: req.body?.name, role: req.body?.role, projects: req.body?.projects });
     sendTo(p.id, { type: "me" }); // their app re-reads what they may do now
     peopleChanged();
-    res.json(p);
+    res.json(ownerView(p));
   } catch (e: any) {
     res.status(400).json({ error: String(e?.message ?? e) });
   }
@@ -139,6 +154,7 @@ app.delete("/api/people/:pid", need("owner"), (req, res) => {
     return res.status(400).json({ error: String(e?.message ?? e) });
   }
   dropSessions(id);
+  agentSeen.delete(id);
   for (const [ws, peer] of peers) if (peer.person === id) ws.close(4401, "removed");
   peopleChanged();
   res.json({ ok: true });
@@ -160,6 +176,9 @@ const sockets = [localServer, remoteServer].map(
 // ---- the live room: who is connected, which project they have open, where their playhead is ----
 type Peer = { sid: string; person: string; project: string | null; t: number; playing: boolean; at: number };
 const peers = new Map<WebSocket, Peer>();
+/** Agents have no socket: they are "here" for a while after each call that touches a project, at the time it was about. */
+const AGENT_HERE_MS = 90_000;
+const agentSeen = new Map<string, { project: string; t: number; at: number }>();
 
 /** Send to everyone who may see `project` (everyone when no project). */
 const send = (msg: unknown, project?: string) => {
@@ -175,25 +194,6 @@ const sendTo = (personId: string, msg: unknown) => {
   for (const [ws, peer] of peers) if (peer.person === personId && ws.readyState === WebSocket.OPEN) ws.send(s);
 };
 
-/**
- * What a person sees of a comment. Editors see everything; commenters and viewers (often clients) see what was asked and
- * Claude's answer, not the agent's command log, costs or this Mac's file paths.
- */
-// this Mac's folders, longest first, so "/Users/me/…/Video Editor/1116s edit/x.json" reads "…/1116s edit/x.json"
-const PRIVATE_ROOTS = [...new Set([VIDEO_ROOT, CAPCUT_DRAFTS, DATA_DIR, SKILL_DIR, os.homedir()])].sort((a, b) => b.length - a.length);
-const redact = (s: string | undefined) => (s == null ? s : PRIVATE_ROOTS.reduce((acc, r) => acc.split(r).join("…"), s));
-const viewOf = (c: Comment, who: Person | undefined): Comment =>
-  can(who, "editor")
-    ? c
-    : {
-        ...c,
-        reply: redact(c.reply),
-        activity: c.activity.filter((a) => a.kind === "info" || a.kind === "text").map((a) => ({ ...a, text: redact(a.text)! })),
-        changed: c.changed?.map((f) => path.basename(f)),
-        options: c.options?.map(({ key, note, pictureChanged, picture }) => ({ key, note: redact(note)!, files: [], pictureChanged, picture })),
-        costUsd: undefined,
-      };
-
 const emitComment = (c: Comment) => {
   for (const [ws, peer] of peers) {
     const who = getPerson(peer.person);
@@ -205,14 +205,27 @@ const projectChanged = (p: Project) => send({ type: "project", id: p.id, proxy: 
 const exportChanged = (p: Project) => send({ type: "export", id: p.id, export: exportState(p) }, p.id);
 const overlayChanged = (p: Project) => send({ type: "overlay", id: p.id, at: Date.now() }, p.id);
 const hooks = { emit: emitComment, projectChanged, overlayChanged };
+const room = makeRoom({ emitComment, projectChanged, overlayChanged, exportChanged });
+
+type Here = ReturnType<typeof publicPerson> & { sid: string; project: string; t: number; playing: boolean; at: number };
+function hereNow(): Here[] {
+  const now = Date.now();
+  const list: Here[] = [...peers.values()].flatMap((pe) => {
+    const who = getPerson(pe.person);
+    return who && pe.project ? [{ sid: pe.sid, ...publicPerson(who), project: pe.project, t: pe.t, playing: pe.playing, at: pe.at }] : [];
+  });
+  for (const [id, a] of agentSeen) {
+    const who = getPerson(id);
+    if (!who || now - a.at > AGENT_HERE_MS) agentSeen.delete(id);
+    else list.push({ sid: `agent-${id}`, ...publicPerson(who), project: a.project, t: a.t, playing: false, at: a.at });
+  }
+  return list;
+}
 
 let presenceTimer: ReturnType<typeof setTimeout> | null = null;
 function broadcastPresence() {
   presenceTimer = null;
-  const list = [...peers.values()].flatMap((pe) => {
-    const who = getPerson(pe.person);
-    return who && pe.project ? [{ sid: pe.sid, ...publicPerson(who), project: pe.project, t: pe.t, playing: pe.playing, at: pe.at }] : [];
-  });
+  const list = hereNow();
   for (const [ws, peer] of peers) {
     const who = getPerson(peer.person);
     if (!who || ws.readyState !== WebSocket.OPEN) continue;
@@ -270,6 +283,24 @@ function watch(p: Project) {
   });
   watchers.set(p.id, w);
 }
+/** First look at a project: follow its files, and make its preview if there is none yet. */
+const openProject = (p: Project) => {
+  watch(p);
+  if (proxyState(p).status === "missing") buildProxy(p, () => projectChanged(p));
+};
+
+// ---- agents: Edit Room as an MCP server (see mcp.ts) ----
+app.all("/mcp", mcpHandler({
+  room,
+  open: openProject,
+  seen: (who, project, t) => {
+    const prev = agentSeen.get(who.id);
+    agentSeen.set(who.id, { project, t: t ?? (prev?.project === project ? prev.t : 0), at: Date.now() });
+    presenceSoon();
+    setTimeout(presenceSoon, AGENT_HERE_MS + 500); // and again when it has been quiet long enough to leave
+  },
+  here: (who, project) => hereNow().filter((x) => x.project === project && x.id !== who.id),
+}));
 
 /** Runs `fn` for a project this person may see; anything else is "no such project" (it doesn't say it exists). */
 const withProject = (fn: (p: Project, req: express.Request, res: express.Response) => unknown) => async (req: express.Request, res: express.Response) => {
@@ -278,6 +309,7 @@ const withProject = (fn: (p: Project, req: express.Request, res: express.Respons
   try {
     await fn(p, req, res);
   } catch (e: any) {
+    if (e instanceof RoomError) return res.status(e.status).json({ error: e.message });
     res.status(500).json({ error: String(e?.message ?? e) });
   }
 };
@@ -355,154 +387,35 @@ app.post("/api/projects/:id/build", need("editor"), withProject((p, req, res) =>
 }));
 
 app.get("/api/projects/:id/model", withProject((p, _req, res) => {
-  watch(p);
-  const st = proxyState(p);
-  if (st.status === "missing") buildProxy(p, () => projectChanged(p)); // first open: make the preview
+  openProject(p);
   res.json({ model: readModel(p), proxy: proxyState(p) });
 }));
 
 // ---- export for Reels / TikTok ----
 app.get("/api/projects/:id/export", withProject((p, _req, res) => res.json(exportState(p))));
-
-app.post("/api/projects/:id/export", need("editor"), withProject((p, _req, res) => {
-  if (!p.draftDir) return res.status(409).json({ error: "this edit isn't built yet" });
-  res.json(startExport(p, () => exportChanged(p)));
-}));
+app.post("/api/projects/:id/export", withProject((p, req, res) => res.json(room.startExport(p, me(req)))));
 
 app.post("/api/projects/:id/proxy", need("editor"), withProject((p, _req, res) => {
   buildProxy(p, () => projectChanged(p));
   res.json(proxyState(p));
 }));
 
+// ---- comments: the same room actions agents use over MCP (room.ts) ----
 app.get("/api/projects/:id/comments", withProject((p, req, res) => {
   const who = me(req);
   res.json(loadComments(p).map((c) => viewOf(c, who)));
 }));
 
-/**
- * The agent runs shell commands on this Mac, and the only thing keeping it to one project is its prompt. So only an
- * editor with every project (someone the owner trusts with the whole Mac) starts it directly or approves a comment;
- * everyone else's comments wait for such an editor to read them first.
- */
-const runsDirectly = (p: Person) => can(p, "editor") && p.projects === "all";
-
-const KINDS = new Set(["caption", "frame", "sfx", "cut", "broll", "general"]);
-const short = (v: unknown, n: number) => String(v ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, n);
-/**
- * The click target from the app, rebuilt from known kinds and short strings. It goes into the agent's prompt next to
- * the comment, so it must not be a place to hide a longer request than the approver sees (the app shows all of it).
- */
-function cleanTarget(t: any): Comment["target"] {
-  const kind = KINDS.has(t?.kind) ? t.kind : "general";
-  const label = short(t?.label, 120) || "the video";
-  const out: Comment["target"] = { kind, label };
-  if (t?.id != null && /^[\w.:-]{1,40}$/.test(String(t.id))) out.id = String(t.id);
-  const detail = short(t?.detail, 160);
-  if (detail) out.detail = detail;
-  return out;
-}
-
-// An editor's comment goes to the agent the moment it is posted (like Claude Design). A commenter's waits for an
-// editor to approve it: the agent runs commands on this Mac, so someone trusted reads every request first.
-app.post("/api/projects/:id/comments", need("commenter"), withProject((p, req, res) => {
+app.post("/api/projects/:id/comments", withProject((p, req, res) => {
   const b = req.body ?? {};
-  if (!String(b.text ?? "").trim()) return res.status(400).json({ error: "empty comment" });
   if (b.target?.kind === "build") return res.status(400).json({ error: "use the build endpoint" });
-  if (!p.draftDir) return res.status(400).json({ error: "this edit isn't built yet: start the edit first" });
-  const who = me(req);
-  const direct = runsDirectly(who);
-  const num = (v: unknown, lo: number, hi: number) => (Number.isFinite(Number(v)) ? Math.max(lo, Math.min(hi, Number(v))) : null);
-  const c: Comment = {
-    id: newId(),
-    project: p.id,
-    createdAt: Date.now(),
-    text: String(b.text).trim().slice(0, 4000),
-    t: num(b.t, 0, 86_400) ?? 0,
-    x: b.x == null ? null : num(b.x, 0, 1),
-    y: b.y == null ? null : num(b.y, 0, 1),
-    target: cleanTarget(b.target),
-    status: direct ? "queued" : "pending",
-    activity: direct ? [] : [{ at: Date.now(), kind: "info", text: "Waiting for an editor to approve it" }],
-    want: Math.max(1, Math.min(KEYS.length, Number(b.want) || 1)),
-    author: authorOf(who),
-  };
-  saveComments(p, [...loadComments(p), c]);
-  emitComment(c);
-  if (direct) enqueue(p, c.id, hooks);
-  res.json(viewOf(c, who));
+  res.json(room.postComment(p, me(req), b));
 }));
-
-app.post("/api/projects/:id/comments/:cid/approve", need("editor"), withProject((p, req, res) => {
-  const cid = String(req.params.cid);
-  const who = me(req);
-  if (!runsDirectly(who)) return res.status(403).json({ error: "Only an editor with access to every project can approve a comment for Claude." });
-  let ok = false;
-  const c = updateComment(p, cid, (x) => {
-    if (x.status !== "pending") return;
-    ok = true;
-    x.status = "queued";
-    x.approvedBy = who.name;
-    x.activity.push({ at: Date.now(), kind: "info", text: `Approved by ${who.name}` });
-  });
-  if (!c || !ok) return res.status(400).json({ error: "this comment isn't waiting for approval" });
-  emitComment(c);
-  enqueue(p, c.id, hooks);
-  res.json(c);
-}));
-
-app.post("/api/projects/:id/comments/:cid/decline", need("editor"), withProject((p, req, res) => {
-  const cid = String(req.params.cid);
-  const who = me(req);
-  const reason = String(req.body?.reason ?? "").trim().slice(0, 500);
-  let ok = false;
-  const c = updateComment(p, cid, (x) => {
-    if (x.status !== "pending") return;
-    ok = true;
-    x.status = "declined";
-    x.approvedBy = who.name;
-    x.reply = reason ? `${who.name}: ${reason}` : undefined;
-    x.activity.push({ at: Date.now(), kind: "info", text: `Declined by ${who.name}` });
-    x.finishedAt = Date.now();
-  });
-  if (!c || !ok) return res.status(400).json({ error: "this comment isn't waiting for approval" });
-  emitComment(c);
-  res.json(c);
-}));
-
-// Editors stop anything; anyone can take back their own comment before the agent starts on it.
-app.post("/api/projects/:id/comments/:cid/stop", need("commenter"), withProject((p, req, res) => {
-  const cid = String(req.params.cid);
-  const who = me(req);
-  const cur = loadComments(p).find((x) => x.id === cid);
-  if (!cur) return res.status(404).json({ error: "no such comment" });
-  const own = (cur.author?.id ?? OWNER) === who.id;
-  if (!can(who, "editor") && !(own && ["pending", "queued"].includes(cur.status)))
-    return res.status(403).json({ error: "Only editors can stop a comment Claude is working on." });
-  const c = updateComment(p, cid, (x) => {
-    if (x.status === "queued" || x.status === "pending") x.status = "stopped";
-  });
-  stop(cid);
-  if (c) emitComment(c);
-  res.json(c ? viewOf(c, who) : null);
-}));
-
-app.post("/api/projects/:id/comments/:cid/undo", need("editor"), withProject((p, req, res) => {
-  const cid = String(req.params.cid);
-  const c = loadComments(p).find((x) => x.id === cid);
-  if (!c?.changed?.length) return res.status(400).json({ error: "nothing to undo" });
-  restore(p, cid, c.changed);
-  const who = me(req);
-  const u = updateComment(p, cid, (x) => {
-    x.status = "undone";
-    x.activity.push({ at: Date.now(), kind: "info", text: `Undone by ${who.name}: restored ${x.changed!.map((f) => path.basename(f)).join(", ")}` });
-  })!;
-  emitComment(u);
-  if (c.changed.some((f) => f.endsWith("index.html"))) overlayChanged(p);
-  if (proxyState(p).status === "stale") buildProxy(p, () => projectChanged(p));
-  projectChanged(p);
-  res.json(u);
-}));
-
+app.post("/api/projects/:id/comments/:cid/approve", withProject((p, req, res) => res.json(room.approve(p, me(req), String(req.params.cid)))));
+app.post("/api/projects/:id/comments/:cid/decline", withProject((p, req, res) => res.json(room.decline(p, me(req), String(req.params.cid), req.body?.reason))));
+app.post("/api/projects/:id/comments/:cid/stop", withProject((p, req, res) => res.json(room.stopComment(p, me(req), String(req.params.cid)))));
+app.post("/api/projects/:id/comments/:cid/undo", withProject((p, req, res) => res.json(room.undo(p, me(req), String(req.params.cid)))));
+app.post("/api/projects/:id/comments/:cid/pick", withProject((p, req, res) => res.json(room.pick(p, me(req), String(req.params.cid), String(req.body?.key ?? "")))));
 
 // ---- options: preview each one, then use one or keep the current version ----
 const optionOf = (p: Project, req: express.Request) => {
@@ -521,37 +434,6 @@ app.get("/media/:id/options/:cid/:key/proxy.mp4", withProject((p, req, res) => {
   const o = optionOf(p, req);
   if (!o || !fs.existsSync(proxyFile(o.op))) return res.status(404).end();
   res.sendFile(proxyFile(o.op), { headers: { "Cache-Control": "no-cache" } });
-}));
-
-app.post("/api/projects/:id/comments/:cid/pick", need("editor"), withProject((p, req, res) => {
-  const cid = String(req.params.cid);
-  const key = String(req.body?.key ?? "");
-  const who = me(req);
-  const c = loadComments(p).find((x) => x.id === cid);
-  if (!c || c.status !== "review") return res.status(400).json({ error: "this comment has no options waiting" });
-  if (key === "current") {
-    const u = updateComment(p, cid, (x) => {
-      x.status = "done";
-      x.chosen = "current";
-      x.activity.push({ at: Date.now(), kind: "info", text: `${who.name} kept the current version` });
-    })!;
-    emitComment(u);
-    return res.json(u);
-  }
-  if (!KEYS.includes(key) || !hasOption(p, cid, key)) return res.status(400).json({ error: "no such option" });
-  const files = applyOption(p, cid, key); // undo restores the snapshot taken before the options were made
-  const opt = c.options?.find((o) => o.key === key);
-  const u = updateComment(p, cid, (x) => {
-    x.status = "done";
-    x.chosen = key;
-    x.changed = files;
-    x.activity.push({ at: Date.now(), kind: "info", text: `${who.name} picked option ${key}${opt ? `: ${opt.note}` : ""}` });
-  })!;
-  emitComment(u);
-  overlayChanged(p);
-  if (proxyState(p).status === "stale") buildProxy(p, () => projectChanged(p));
-  projectChanged(p);
-  res.json(u);
 }));
 
 // ---- media ----

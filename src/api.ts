@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Comment, EditModel, ExportState, Invite, Person, PersonFull, Presence, ProjectInfo, ProxyState, RawInfo, Role, Target } from "./types";
+import type { Comment, EditModel, ExportState, Invite, McpUrls, Person, PersonFull, Presence, ProjectInfo, ProxyState, RawInfo, Role, Target } from "./types";
 
 /** Fired when the server says this device's session is gone; the app swaps to the login screen. */
 export const LOGIN_EVENT = "room:login";
@@ -27,7 +27,9 @@ export const api = {
   invite: (token: string) => postJson("/api/invite", { token }).then(plain<{ role: Role; from: string; projects: string[] | null }>),
   join: (token: string, name: string) => postJson("/api/join", { token, name }).then(plain),
   rename: (name: string) => send("PATCH", "/api/me", { name }).then(j<Person>),
-  people: () => fetch("/api/people").then(j<{ people: PersonFull[]; invites: Invite[]; publicUrl: string | null }>),
+  people: () => fetch("/api/people").then(j<{ people: PersonFull[]; invites: Invite[]; publicUrl: string | null; mcp: McpUrls }>),
+  connectAgent: (name: string, role: Role, projects: "all" | string[]) =>
+    postJson("/api/people/agents", { name, role, projects }).then(j<{ person: PersonFull; key: string; mcp: McpUrls }>),
   makeInvite: (role: Role, projects: "all" | string[]) =>
     postJson("/api/people/invites", { role, projects }).then(j<{ token: string; expires: number; url: string | null }>),
   cancelInvites: () => fetch("/api/people/invites", { method: "DELETE" }).then(j),

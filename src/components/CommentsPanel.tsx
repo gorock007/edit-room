@@ -112,6 +112,7 @@ function Card({ c, focused, editor, approver, mine, onFocus, onSeek, onStop, onU
           {author && <span className="mt-0.5"><Avatar p={author} size={18} /></span>}
           <p className="min-w-0 text-[13px] leading-snug text-ink-100">
             {author && <span className="mr-1 font-semibold" style={{ color: author.color }}>{mine ? "You" : author.name}</span>}
+            {author?.kind === "agent" && <span className="mr-1 rounded bg-white/10 px-1 py-px align-[1px] text-[9px] font-semibold uppercase tracking-wide text-ink-300">agent</span>}
             {c.text}
           </p>
         </div>
