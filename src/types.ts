@@ -41,9 +41,21 @@ export type VersionInfo = {
 
 export type Comment = {
   id: string; project: string; createdAt: number; text: string; t: number; x: number | null; y: number | null;
-  target: Target; status: "pending" | "declined" | "queued" | "working" | "review" | "done" | "failed" | "stopped" | "undone";
+  target: Target; status: "pending" | "held" | "declined" | "queued" | "working" | "review" | "done" | "failed" | "stopped" | "undone";
   activity: Activity[]; reply?: string; changed?: string[]; costUsd?: number; finishedAt?: number;
   want?: number; options?: Option[]; chosen?: string; author?: Author; approvedBy?: string;
+  pick?: Tier | "auto"; route?: Route; held?: string;
 };
+/** Which model a comment runs on: light = Sonnet · low, standard = Opus · medium, deep = Opus · high. */
+export type Tier = "light" | "standard" | "deep";
+export type Pick = Tier | "auto";
+export const PICKS: { key: Pick; label: string; title: string }[] = [
+  { key: "auto", label: "Auto", title: "Edit Room picks the model from the comment and your plan's usage" },
+  { key: "light", label: "Quick", title: "Sonnet 5.5, low effort: small fixes, uses the least of your plan" },
+  { key: "standard", label: "Opus", title: "Opus 5.5, medium effort" },
+  { key: "deep", label: "Opus+", title: "Opus 5.5, high effort: the hook, pacing, anything big" },
+];
+export type Route = { tier: Tier; model: string; effort: string; label: string; why: string; by: "rules" | "haiku" | "you"; usage: string; stepped?: string };
+export type Usage = { fiveHour: number | null; sevenDay: number | null; at: number; source: string; band: "green" | "amber" | "red" | "unknown" };
 export type Option = { key: string; note: string; files: string[]; pictureChanged: boolean; picture?: "building" | "ready" | "failed" };
 export type Device = "desktop" | "phone" | "feed";

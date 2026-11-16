@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { can, runsDirectly, type Comment, type Target } from "../types";
+import { api } from "../api";
+import { can, runsDirectly, type Comment, type Pick, type Target, type Tier, type Usage } from "../types";
 import { ago, basename, cx, fmt } from "../util";
 import { useMe } from "../room";
 import { Composer, TargetChip } from "./Composer";
@@ -15,7 +16,9 @@ type Props = {
   onUndo: (id: string) => void;
   onApprove: (id: string) => void;
   onDecline: (id: string) => void;
-  onSubmit: (c: { text: string; t: number; x: null; y: null; target: Target; want: number }) => void;
+  /** start a comment that waits because the plan is nearly used up */
+  onRun: (id: string, tier: Tier) => void;
+  onSubmit: (c: { text: string; t: number; x: null; y: null; target: Target; want: number; pick?: Pick }) => void;
   onCompare: (id: string) => void;
   /** phone layout: full width, scrolls with the page */
   full?: boolean;
@@ -36,6 +39,7 @@ export function CommentsPanel(p: Props) {
   const working = p.comments.filter((c) => c.status === "working" || c.status === "queued").length;
   // the moment you start typing is the comment's time, not the moment you press Send (the video may be playing)
   const [at, setAt] = useState<number | null>(null);
+  const usage = useUsage(editor, working);
   return (
     <aside className={cx("flex shrink-0 flex-col bg-ink-900", p.full ? "w-full" : "w-[320px] border-l border-white/5 xl:w-[380px]")}>
       <div className="flex h-11 items-center justify-between gap-2 border-b border-white/5 px-4">
@@ -50,6 +54,7 @@ export function CommentsPanel(p: Props) {
               {waiting.length} to approve
             </button>
           )}
+          {usage && <UsageMeter u={usage} />}
           <span>{working ? `${working} in progress` : `${p.comments.length} total`}</span>
         </div>
       </div>
@@ -59,8 +64,8 @@ export function CommentsPanel(p: Props) {
           target={{ kind: "general", label: "whole video" }}
           t={at ?? p.time}
           onFocus={() => setAt(p.time)}
-          onSubmit={(text, want) => {
-            p.onSubmit({ text, t: at ?? p.time, x: null, y: null, target: { kind: "general", label: "the whole video" }, want });
+          onSubmit={(text, want, model) => {
+            p.onSubmit({ text, t: at ?? p.time, x: null, y: null, target: { kind: "general", label: "the whole video" }, want, pick: model });
             setAt(null);
           }}
         />
@@ -81,7 +86,7 @@ export function CommentsPanel(p: Props) {
   );
 }
 
-function Card({ c, focused, editor, approver, mine, onFocus, onSeek, onStop, onUndo, onApprove, onDecline, onCompare }: { c: Comment; focused: boolean; editor: boolean; approver: boolean; mine: boolean } & Props) {
+function Card({ c, focused, editor, approver, mine, onFocus, onSeek, onStop, onUndo, onApprove, onDecline, onCompare, onRun }: { c: Comment; focused: boolean; editor: boolean; approver: boolean; mine: boolean } & Props) {
   const ref = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   useEffect(() => {
@@ -153,10 +158,42 @@ function Card({ c, focused, editor, approver, mine, onFocus, onSeek, onStop, onU
           )
         )}
 
+        {c.status === "held" && (
+          <div className="mt-2 rounded-md bg-gold/5 px-2 py-1.5 text-[11.5px] leading-snug text-ink-300 ring-1 ring-gold/20">
+            {c.held}
+            {approver ? (
+              <div className="mt-2 flex gap-1.5">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRun(c.id, "light");
+                  }}
+                  className="flex-1 rounded-lg bg-gold py-1.5 text-[12px] font-semibold text-ink-950 hover:brightness-110"
+                  title="Sonnet 5.5, low effort: uses the least of your plan"
+                >
+                  Run on Sonnet
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRun(c.id, c.route?.tier === "deep" ? "deep" : "standard");
+                  }}
+                  className="flex-1 rounded-lg py-1.5 text-[12px] font-medium text-ink-100 ring-1 ring-white/10 hover:bg-white/5"
+                  title={c.route?.tier === "deep" ? "Opus 5.5, high effort" : "Opus 5.5, medium effort"}
+                >
+                  Run on Opus
+                </button>
+              </div>
+            ) : (
+              <div className="mt-1 text-ink-400">An editor can start it.</div>
+            )}
+          </div>
+        )}
+
         {live && (
           <div className="mt-2 flex items-center gap-2 text-[12px] text-ink-300">
             <span className={cx("h-1.5 w-1.5 shrink-0 rounded-full", c.status === "working" ? "bg-gold pulse-ring" : "bg-ink-500")} />
-            <span className="truncate">{c.status === "queued" ? "Waiting for the previous comment to finish" : latest?.text ?? "Starting…"}</span>
+            <span className="truncate">{c.status === "queued" ? (latest?.text === "Choosing a model" ? "Choosing a model…" : "Waiting for the previous comment to finish") : latest?.text ?? "Starting…"}</span>
           </div>
         )}
 
@@ -207,12 +244,20 @@ function Card({ c, focused, editor, approver, mine, onFocus, onSeek, onStop, onU
                 {open ? "Hide" : "Show"} {steps.length} steps
               </button>
             )}
+            {editor && c.route && c.status !== "held" && (
+              <span
+                className={cx("rounded px-1 py-px", c.route.stepped ? "bg-gold/10 text-gold/90" : "bg-white/5 text-ink-400")}
+                title={[`${c.route.label}: ${c.route.why}`, c.route.by === "you" ? "Picked by hand" : `Chosen by ${c.route.by === "rules" ? "Edit Room's rules" : "Haiku"}`, c.route.stepped, `Plan usage then: ${c.route.usage}`].filter(Boolean).join("\n")}
+              >
+                {c.route.label.replace(" 5.5", "")}
+              </span>
+            )}
             {editor && c.changed && c.changed.length > 0 && c.status !== "undone" && (
               <span title={c.changed.join("\n")}>{c.changed.length} file{c.changed.length > 1 ? "s" : ""} changed</span>
             )}
           </div>
           <div className="flex gap-1">
-            {(live && editor) || ((live || c.status === "pending") && mine && c.status !== "working") ? (
+            {(live && editor) || (c.status === "held" && editor) || ((live || c.status === "pending" || c.status === "held") && mine && c.status !== "working") ? (
               <SmallBtn onClick={() => onStop(c.id)}>{mine && c.status !== "working" ? "Withdraw" : "Stop"}</SmallBtn>
             ) : null}
             {editor && !live && c.status !== "undone" && (c.changed?.length ?? 0) > 0 && <SmallBtn onClick={() => onUndo(c.id)}>Undo</SmallBtn>}
@@ -242,6 +287,7 @@ function Card({ c, focused, editor, approver, mine, onFocus, onSeek, onStop, onU
 function StatusBadge({ c }: { c: Comment }) {
   const map: Record<Comment["status"], [string, string]> = {
     pending: ["Needs approval", "text-gold bg-gold/10 ring-1 ring-gold/30"],
+    held: ["Waiting", "text-gold bg-gold/10 ring-1 ring-gold/30"],
     declined: ["Declined", "text-ink-400 bg-white/5"],
     queued: ["Queued", "text-ink-400 bg-white/5"],
     working: ["Working", "text-gold bg-gold/10"],
@@ -253,6 +299,38 @@ function StatusBadge({ c }: { c: Comment }) {
   };
   const [label, style] = map[c.status];
   return <span className={cx("shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide", style)}>{label}</span>;
+}
+
+/** The plan's usage, for editors: it decides which model comments run on. Refreshed every 2 minutes and after a run. */
+function useUsage(editor: boolean, working: number) {
+  const [u, setU] = useState<Usage | null>(null);
+  useEffect(() => {
+    if (!editor) return;
+    let gone = false;
+    const load = () => api.usage().then((x) => !gone && setU(x)).catch(() => {});
+    load();
+    const t = setInterval(load, 120_000);
+    return () => {
+      gone = true;
+      clearInterval(t);
+    };
+  }, [editor, working]);
+  return u;
+}
+
+function UsageMeter({ u }: { u: Usage }) {
+  if (u.band === "unknown") return null;
+  const tone = u.band === "red" ? "text-red-300 ring-red-400/30" : u.band === "amber" ? "text-gold ring-gold/30" : "text-ink-400 ring-white/10";
+  const effect =
+    u.band === "red" ? "Near the limit: small fixes run on Sonnet, big ones wait for you." :
+    u.band === "amber" ? "Getting close: Opus runs at medium effort, not high." :
+    "Plenty left: each comment gets the model it needs.";
+  const main = u.sevenDay != null && (u.fiveHour == null || u.sevenDay >= u.fiveHour) ? `Week ${u.sevenDay}%` : `5h ${u.fiveHour}%`;
+  return (
+    <span className={cx("rounded-md px-1.5 py-0.5 font-medium ring-1", tone)} title={`Claude plan usage: 5-hour ${u.fiveHour ?? "?"}%, week ${u.sevenDay ?? "?"}%.\n${effect}`}>
+      {main}
+    </span>
+  );
 }
 
 function SmallBtn({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {

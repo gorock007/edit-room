@@ -54,6 +54,8 @@ function brief(c: Comment) {
     at_seconds: ROUND(c.t),
     target: c.target.label + (c.target.detail ? ` (${c.target.detail})` : ""),
     ...(c.reply ? { reply: c.reply } : {}),
+    ...(c.held ? { waiting_because: c.held } : {}),
+    ...(c.route ? { model: c.route.label } : {}),
     ...(c.options?.length ? { options: c.options.map((o) => ({ key: o.key, note: o.note })) } : {}),
     ...(c.chosen ? { chosen: c.chosen } : {}),
     ...(c.approvedBy ? { approved_or_declined_by: c.approvedBy } : {}),
@@ -171,7 +173,7 @@ function buildServer(who: Person, d: McpDeps) {
     {
       title: "List comments",
       description: "The comments on an edit, newest first: what was asked, by whom, at what time and target, and what happened (status, Claude's reply, options).",
-      inputSchema: { project: id, status: z.enum(["pending", "queued", "working", "review", "done", "failed", "stopped", "undone", "declined"]).optional(), limit: z.number().int().min(1).max(100).optional() },
+      inputSchema: { project: id, status: z.enum(["pending", "held", "queued", "working", "review", "done", "failed", "stopped", "undone", "declined"]).optional(), limit: z.number().int().min(1).max(100).optional() },
       annotations: { readOnlyHint: true },
     },
     guard(({ project: pid, status, limit }: { project: string; status?: string; limit?: number }) => {

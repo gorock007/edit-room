@@ -1,6 +1,6 @@
 import { createPortal } from "react-dom";
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
-import type { Comment, Device, EditModel, Target } from "../types";
+import type { Comment, Device, EditModel, Pick, Target } from "../types";
 import { cx } from "../util";
 import { Composer } from "./Composer";
 import { PLATFORMS, fractions, marginsFor, type Platform, type SafeMode } from "../safezones";
@@ -18,7 +18,7 @@ type Props = {
   comments: Comment[];
   focusId: string | null;
   onFocus: (id: string) => void;
-  onSubmit: (c: { text: string; t: number; x: number | null; y: number | null; target: Target; want: number }) => void;
+  onSubmit: (c: { text: string; t: number; x: number | null; y: number | null; target: Target; want: number; pick?: Pick }) => void;
   muted?: boolean;
   /** draw where each app's UI sits (vertical) or title-safe (16:9) */
   safe?: SafeMode;
@@ -202,8 +202,8 @@ export const Stage = forwardRef<StageHandle, Props>(function Stage(p, ref) {
                       t={draft.t}
                       wide={p.sheet}
                       onCancel={() => setDraft(null)}
-                      onSubmit={(text, want) => {
-                        p.onSubmit({ text, t: draft.t, x: draft.x, y: draft.y, target: draft.target, want });
+                      onSubmit={(text, want, model) => {
+                        p.onSubmit({ text, t: draft.t, x: draft.x, y: draft.y, target: draft.target, want, pick: model });
                         setDraft(null);
                       }}
                     />

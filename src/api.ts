@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Comment, EditModel, ExportState, Invite, McpUrls, Person, PersonFull, Presence, ProjectInfo, ProxyState, RawInfo, Role, Target, VersionInfo } from "./types";
+import type { Comment, EditModel, ExportState, Invite, McpUrls, Person, PersonFull, Presence, ProjectInfo, ProxyState, RawInfo, Role, Target, Tier, Usage, VersionInfo, Pick } from "./types";
 
 /** Fired when the server says this device's session is gone; the app swaps to the login screen. */
 export const LOGIN_EVENT = "room:login";
@@ -39,10 +39,12 @@ export const api = {
   model: (id: string) => fetch(`/api/projects/${id}/model`).then(j<{ model: EditModel; proxy: ProxyState }>),
   comments: (id: string) => fetch(`/api/projects/${id}/comments`).then(j<Comment[]>),
   rebuild: (id: string) => fetch(`/api/projects/${id}/proxy`, { method: "POST" }).then(j<ProxyState>),
-  post: (id: string, body: { text: string; t: number; x: number | null; y: number | null; target: Target; want?: number }) =>
+  post: (id: string, body: { text: string; t: number; x: number | null; y: number | null; target: Target; want?: number; pick?: Pick }) =>
     postJson(`/api/projects/${id}/comments`, body).then(j<Comment>),
   stop: (id: string, cid: string) => fetch(`/api/projects/${id}/comments/${cid}/stop`, { method: "POST" }).then(j<Comment>),
   undo: (id: string, cid: string) => fetch(`/api/projects/${id}/comments/${cid}/undo`, { method: "POST" }).then(j<Comment>),
+  run: (id: string, cid: string, tier: Tier) => postJson(`/api/projects/${id}/comments/${cid}/run`, { tier }).then(j<Comment>),
+  usage: (fresh = false) => fetch(`/api/usage${fresh ? "?fresh=1" : ""}`).then(j<Usage>),
   approve: (id: string, cid: string) => fetch(`/api/projects/${id}/comments/${cid}/approve`, { method: "POST" }).then(j<Comment>),
   decline: (id: string, cid: string, reason: string) => postJson(`/api/projects/${id}/comments/${cid}/decline`, { reason }).then(j<Comment>),
   optionModel: (id: string, cid: string, key: string) => fetch(`/api/projects/${id}/options/${cid}/${key}/model`).then(j<{ model: EditModel; proxy: ProxyState }>),

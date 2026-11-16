@@ -11,9 +11,22 @@ export type Target = {
 };
 export type Activity = { at: number; kind: "tool" | "text" | "info" | "error"; text: string };
 // pending = a commenter's comment waiting for an editor to approve it; declined = an editor said no
-export type CommentStatus = "pending" | "declined" | "queued" | "working" | "review" | "done" | "failed" | "stopped" | "undone";
+// held = the plan is nearly used up and this comment is big: it waits until someone says go
+export type CommentStatus = "pending" | "held" | "declined" | "queued" | "working" | "review" | "done" | "failed" | "stopped" | "undone";
 /** Who wrote a comment (a copy, so it still reads right after the person is renamed or removed). No author = the owner. */
 export type Author = { id: string; name: string; color: string; role: string; kind?: "agent" };
+/** Which model a comment runs on (server/router.ts). */
+export type Tier = "light" | "standard" | "deep";
+export type Route = {
+  tier: Tier;
+  model: string;
+  effort: string;
+  label: string; // "Sonnet 5.5 · low"
+  why: string;
+  by: "rules" | "haiku" | "you";
+  usage: string; // the plan's usage when it was routed
+  stepped?: string; // why it runs on less than the rules picked
+};
 export type Option = { key: string; note: string; files: string[]; pictureChanged: boolean; picture?: "building" | "ready" | "failed" };
 export type Comment = {
   id: string;
@@ -36,6 +49,9 @@ export type Comment = {
   chosen?: string; // the option key used, or "current"
   author?: Author;
   approvedBy?: string; // the editor who let a commenter's comment run (or declined it)
+  pick?: Tier | "auto"; // the model the poster asked for (editors only); auto = the router decides
+  route?: Route; // what it ran on, and why
+  held?: string; // why it is waiting (status "held")
 };
 
 const file = (p: Project) => path.join(p.dataDir, "comments.json");

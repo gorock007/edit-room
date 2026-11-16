@@ -17,6 +17,17 @@ npm run dev        # server on :4310 + app on http://127.0.0.1:5310 (also keeps 
 - **Options**: pick "2 options" or "3 options" in the comment box. Claude makes each take without touching the edit,
   then they play side by side, in sync, next to the current version; **Use this** applies one, **Keep current** drops
   them.
+- **Models**: each comment runs on the model it needs (`server/router.ts`). Small fixes to one thing (a caption's
+  colour, a sound's volume, nudging a cut) run on Sonnet 5.5 at low effort in a fresh session; normal edits and options
+  on Opus 5.5 at medium; the hook, pacing, story or anything new on Opus 5.5 at high. Rules decide most comments; one
+  short Haiku call decides the rest. Opus comments continue the project's one conversation, so Claude remembers the
+  earlier ones. **Auto** next to Send lets you pick by hand (Quick / Opus / Opus+); each comment shows what it ran on
+  and why (hover).
+- **Plan usage**: Edit Room reads your Claude plan's usage from Claude Code (the same numbers as `/usage`, no model
+  call; Jarvis's `~/.jarvis/usage.json` as a fallback) and shows it next to Comments. Past 70% of the 5-hour window or
+  85% of the week, Opus runs at medium instead of high; past 90% / 95%, Opus work runs on Sonnet and big jobs (a
+  first edit, options, a high-effort change) wait as *Waiting* until you press Run. A model you pick by hand is never
+  stepped down.
 - **Devices**: Desktop / Phone / In feed (`1` `2` `3`).
 - **New edit** (`+` in the header): drop the raw camera file, or pick it from Photos/Files on the phone, add an
   optional note ("starts at …"), and Claude builds the first edit with the talking-head-reel-edit skill. The file goes

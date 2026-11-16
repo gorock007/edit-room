@@ -9,6 +9,8 @@ import { changedSince, loadComments, restore, snapshot, updateComment, type Acti
 import { KEYS, optionProject, saveOption } from "./options.ts";
 import { ALL, coveredBy } from "../src/safezones.ts";
 import { rawDir, rawInfo } from "./uploads.ts";
+import { routeFor } from "./router.ts";
+import { noteRateLimit, readUsage } from "./usage.ts";
 
 type Emit = (c: Comment) => void;
 type Hooks = {
@@ -229,11 +231,34 @@ async function runOne(p: Project, commentId: string, hooks: Hooks) {
     if (u) hooks.emit(u);
     return u;
   };
-  if (loadComments(p).find((x) => x.id === commentId)?.status !== "queued") return; // stopped while waiting
+  const queued = () => loadComments(p).find((x) => x.id === commentId);
+  const first = queued();
+  if (first?.status !== "queued") return; // stopped while waiting
+
+  // which model, and whether the plan's usage lets it run now (server/router.ts)
+  set((x) => x.activity.push({ at: Date.now(), kind: "info", text: "Choosing a model" }));
+  const route = await routeFor(first, await readUsage());
+  if (queued()?.status !== "queued") return; // stopped while it was being routed
+  const { hold, ...chosen } = route;
+  if (hold) {
+    set((x) => {
+      x.status = "held";
+      x.held = hold;
+      x.route = chosen;
+      x.activity.push({ at: Date.now(), kind: "info", text: `Waiting: ${hold}` });
+    });
+    return;
+  }
   const c = set((x) => {
     x.status = "working";
-    x.activity.push({ at: Date.now(), kind: "info", text: "Claude picked this up" });
+    x.held = undefined;
+    x.route = chosen;
+    x.activity.push({ at: Date.now(), kind: "info", text: `Claude picked this up on ${chosen.label} (${chosen.why}${chosen.stepped ? `; ${chosen.stepped}` : ""})` });
   })!;
+  // Opus comments continue the project's one conversation, so Claude remembers the earlier ones (and its prompt cache
+  // stays warm). A quick Sonnet fix starts fresh: replaying a long Opus conversation on another model costs more than
+  // the fix itself.
+  const continues = chosen.model === "claude-opus-5-5";
 
   let framePath: string | null = null;
   if (fs.existsSync(proxyFile(p))) {
@@ -250,7 +275,7 @@ async function runOne(p: Project, commentId: string, hooks: Hooks) {
 
   const abort = new AbortController();
   aborts.set(c.id, abort);
-  const resume = lastSession(p);
+  const resume = continues ? lastSession(p) : undefined;
   let finalText = "";
   let failed = false;
   const attempt = async (resumeId?: string) => {
@@ -260,6 +285,8 @@ async function runOne(p: Project, commentId: string, hooks: Hooks) {
         cwd: VIDEO_ROOT, // the user's memory and project instructions are keyed to this folder
         additionalDirectories: [CAPCUT_DRAFTS], // edits auto-accepted only here and in cwd; anything else goes through canUseTool
         resume: resumeId,
+        model: chosen.model,
+        effort: chosen.effort as "low" | "medium" | "high",
         abortController: abort,
         settingSources: ["user", "project", "local"],
         systemPrompt: { type: "preset", preset: "claude_code", append: ROOM_PROMPT },
@@ -277,9 +304,10 @@ async function runOne(p: Project, commentId: string, hooks: Hooks) {
         },
       },
     })) {
-      if (m.type === "system" && m.subtype === "init") {
+      if (m.type === "system" && m.subtype === "init" && continues) {
         fs.writeFileSync(sessionFile(p), JSON.stringify({ sessionId: m.session_id }));
       }
+      if (m.type === "rate_limit_event") noteRateLimit(m.rate_limit_info);
       const lines = activityLine(m);
       if (lines.length) set((x) => x.activity.push(...lines));
       if (m.type === "result") {

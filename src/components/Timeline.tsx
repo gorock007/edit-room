@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import type { Comment, EditModel, Presence, Sfx, Target } from "../types";
+import type { Comment, EditModel, Pick, Presence, Sfx, Target } from "../types";
 import { cx, fmt } from "../util";
 import { Composer } from "./Composer";
 
@@ -11,7 +11,7 @@ type Props = {
   onSeek: (t: number) => void;
   onPause: () => void;
   onSolo: (s: Sfx) => void;
-  onSubmit: (c: { text: string; t: number; x: null; y: null; target: Target; want: number }) => void;
+  onSubmit: (c: { text: string; t: number; x: null; y: null; target: Target; want: number; pick?: Pick }) => void;
   onFocus: (id: string) => void;
   /** other people in this project right now: their playheads, in their colour */
   others?: Presence[];
@@ -279,8 +279,8 @@ export function Timeline(p: Props) {
             target={draft.target}
             t={draft.t}
             onCancel={() => setDraft(null)}
-            onSubmit={(text, want) => {
-              p.onSubmit({ text, t: draft.t, x: null, y: null, target: draft.target, want });
+            onSubmit={(text, want, model) => {
+              p.onSubmit({ text, t: draft.t, x: null, y: null, target: draft.target, want, pick: model });
               setDraft(null);
             }}
           />

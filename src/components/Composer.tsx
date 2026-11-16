@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { runsDirectly, type Target } from "../types";
+import { PICKS, runsDirectly, type Pick, type Target } from "../types";
 import { cx, fmt } from "../util";
 import { useMe } from "../room";
 
@@ -22,19 +22,21 @@ export function TargetChip({ target, t }: { target: Target; t?: number }) {
   );
 }
 
-export function Composer({ target, t, onSubmit, onCancel, onFocus, compact, wide }: { target: Target; t: number; onSubmit: (text: string, want: number) => void; onCancel?: () => void; onFocus?: () => void; compact?: boolean; wide?: boolean }) {
+export function Composer({ target, t, onSubmit, onCancel, onFocus, compact, wide }: { target: Target; t: number; onSubmit: (text: string, want: number, pick: Pick) => void; onCancel?: () => void; onFocus?: () => void; compact?: boolean; wide?: boolean }) {
   const me = useMe();
   const [text, setText] = useState("");
   const [want, setWant] = useState(1);
+  const [pick, setPick] = useState<Pick>("auto");
   const ta = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (!compact) ta.current?.focus();
   }, [compact]);
   const send = () => {
     if (text.trim()) {
-      onSubmit(text.trim(), want);
+      onSubmit(text.trim(), want, pick);
       setText("");
       setWant(1);
+      setPick("auto");
     }
   };
   return (
@@ -63,19 +65,35 @@ export function Composer({ target, t, onSubmit, onCancel, onFocus, compact, wide
         placeholder={compact ? "Ask for a change to the whole video…" : "What should change here?"}
         className="w-full resize-none rounded-lg bg-ink-950/60 px-2.5 py-2 text-[16px] md:text-[13px] leading-snug text-ink-100 placeholder:text-ink-500 outline-none ring-1 ring-white/5 focus:ring-gold/40"
       />
-      <div className="mt-2 flex items-center justify-between">
+      <div className="mt-2 flex items-center justify-between gap-1.5">
         <div className="flex rounded-md bg-ink-950/60 p-0.5 ring-1 ring-white/5" title="Ask for options to compare side by side before anything changes">
           {[1, 2, 3].map((n) => (
             <button
               key={n}
               onClick={() => setWant(n)}
-              className={cx("rounded px-1.5 py-0.5 text-[11px] font-medium transition", want === n ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-200")}
+              className={cx("whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium transition", want === n ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-200")}
             >
-              {n === 1 ? "Do it" : `${n} options`}
+              {n === 1 ? "Do it" : me && runsDirectly(me) ? `${n} opts` : `${n} options`}
             </button>
           ))}
         </div>
-        <div className="flex gap-1.5">
+        <div className="flex items-center gap-1.5">
+          {me && runsDirectly(me) && (
+            <select
+              value={pick}
+              onChange={(e) => setPick(e.target.value as Pick)}
+              onKeyDown={(e) => e.stopPropagation()}
+              title={PICKS.find((x) => x.key === pick)?.title}
+              aria-label="Model"
+              className={cx("rounded-md bg-ink-950/60 px-1 py-1 text-[11px] font-medium outline-none ring-1 ring-white/5 focus:ring-gold/40", pick === "auto" ? "text-ink-400" : "text-gold")}
+            >
+              {PICKS.map((x) => (
+                <option key={x.key} value={x.key} title={x.title}>
+                  {x.label}
+                </option>
+              ))}
+            </select>
+          )}
           {onCancel && (
             <button onClick={onCancel} className="rounded-md px-2 py-1 text-[12px] text-ink-300 hover:bg-white/5">
               Cancel

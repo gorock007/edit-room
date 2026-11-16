@@ -7,7 +7,8 @@ import { exportState, startExport } from "./exporter.ts";
 import { enqueue, stop } from "./agent.ts";
 import { KEYS, applyOption, hasOption } from "./options.ts";
 import { OWNER, can, type Person } from "./people.ts";
-import { loadComments, newId, restore, saveComments, updateComment, type Author, type Comment, type Target } from "./store.ts";
+import { loadComments, newId, restore, saveComments, updateComment, type Author, type Comment, type Target, type Tier } from "./store.ts";
+import { TIERS, TIER_NAMES } from "./router.ts";
 import { info, nameVersion, record, restoreFiles, same, syncOutside, versions, type Version } from "./versions.ts";
 
 /**
@@ -56,6 +57,7 @@ export const viewOf = (c: Comment, who: Person | undefined): Comment =>
         changed: c.changed?.map((f) => path.basename(f)),
         options: c.options?.map(({ key, note, pictureChanged, picture }) => ({ key, note: redact(note)!, files: [], pictureChanged, picture })),
         costUsd: undefined,
+        route: undefined,
       };
 
 const KINDS = new Set(["caption", "frame", "sfx", "cut", "broll", "general"]);
@@ -138,7 +140,7 @@ export function makeRoom(e: Emitters) {
 
   return {
     /** An approver's comment goes to the agent at once (like Claude Design); anyone else's waits for approval. */
-    postComment(p: Project, who: Person, b: { text?: unknown; t?: unknown; x?: unknown; y?: unknown; target?: Target; want?: unknown }) {
+    postComment(p: Project, who: Person, b: { text?: unknown; t?: unknown; x?: unknown; y?: unknown; target?: Target; want?: unknown; pick?: unknown }) {
       needRole(who, "commenter");
       const text = String(b.text ?? "").trim();
       if (!text) throw new RoomError(400, "empty comment");
@@ -157,6 +159,8 @@ export function makeRoom(e: Emitters) {
         activity: direct ? [] : [{ at: Date.now(), kind: "info", text: "Waiting for an editor to approve it" }],
         want: Math.max(1, Math.min(KEYS.length, Number(b.want) || 1)),
         author: authorOf(who),
+        // only someone who starts Claude directly picks its model; everyone else's comment is routed
+        pick: direct && TIER_NAMES.includes(b.pick as Tier) ? (b.pick as Tier) : "auto",
       };
       saveComments(p, [...loadComments(p), c]);
       e.emitComment(c);
@@ -198,15 +202,35 @@ export function makeRoom(e: Emitters) {
       return c;
     },
 
+    /** A held comment (the plan is nearly used up) runs now, on the model the person picks. */
+    release(p: Project, who: Person, cid: string, tierIn: unknown) {
+      if (!runsDirectly(who)) throw new RoomError(403, "Only an editor with access to every project can start Claude.");
+      const tier = TIER_NAMES.includes(tierIn as Tier) ? (tierIn as Tier) : null;
+      if (!tier) throw new RoomError(400, `pick one of: ${TIER_NAMES.join(", ")}`);
+      let ok = false;
+      const c = updateComment(p, cid, (x) => {
+        if (x.status !== "held") return;
+        ok = true;
+        x.status = "queued";
+        x.pick = tier;
+        x.held = undefined;
+        x.activity.push({ at: Date.now(), kind: "info", text: `${who.name} started it on ${TIERS[tier].label}` });
+      });
+      if (!c || !ok) throw new RoomError(400, "this comment isn't waiting");
+      e.emitComment(c);
+      enqueue(p, c.id, hooks);
+      return viewOf(c, who);
+    },
+
     /** Editors stop anything; anyone can take back their own comment before the agent starts on it. */
     stopComment(p: Project, who: Person, cid: string) {
       needRole(who, "commenter");
       const cur = find(p, cid);
       const own = (cur.author?.id ?? OWNER) === who.id;
-      if (!can(who, "editor") && !(own && ["pending", "queued"].includes(cur.status)))
+      if (!can(who, "editor") && !(own && ["pending", "queued", "held"].includes(cur.status)))
         throw new RoomError(403, "Only editors can stop a comment Claude is working on.");
       const c = updateComment(p, cid, (x) => {
-        if (x.status === "queued" || x.status === "pending") x.status = "stopped";
+        if (x.status === "queued" || x.status === "pending" || x.status === "held") x.status = "stopped";
       })!;
       stop(cid);
       e.emitComment(c);

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, useSocket } from "./api";
 import { SoundEngine } from "./sound";
-import { can, type Comment, type Device, type EditModel, type ExportState, type Person, type Presence, type ProjectInfo, type ProxyState, type Target } from "./types";
+import { can, type Comment, type Device, type EditModel, type ExportState, type Person, type Presence, type ProjectInfo, type ProxyState, type Target, type Pick } from "./types";
 import { MeContext } from "./room";
 import { Avatar, SharePanel } from "./components/People";
 import { ROLE_INFO } from "./Join";
@@ -45,7 +45,7 @@ const VERTICAL_ASK =
 /** The "New edit" page before its folder exists (it is made when the first file is picked). */
 const NEW = "__new";
 
-type NewComment = { text: string; t: number; x: number | null; y: number | null; target: Target; want: number };
+type NewComment = { text: string; t: number; x: number | null; y: number | null; target: Target; want: number; pick?: Pick };
 
 /** True while the window is phone-width. */
 function useNarrow() {
@@ -798,6 +798,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
           onStop={(id) => pid && api.stop(pid, id)}
           onUndo={(id) => pid && api.undo(pid, id).catch((e) => setError(e.message))}
           onApprove={(id) => pid && api.approve(pid, id).catch((e) => setError(e.message))}
+          onRun={(id, tier) => pid && api.run(pid, id, tier).catch((e) => setError(e.message))}
           onDecline={decline}
           onSubmit={submit}
           onCompare={(id) => {

@@ -20,6 +20,7 @@ import { MAX_CHUNK, newEditFolder, putChunk, rawDir, rawInfo, saveNote, startUpl
 import { RoomError, authorOf, makeRoom, runsDirectly, viewOf } from "./room.ts";
 import { mcpHandler } from "./mcp.ts";
 import { versionProject } from "./versions.ts";
+import { readUsage } from "./usage.ts";
 
 const app = express();
 app.set("case sensitive routing", true); // "/API/..." must not reach a route the login gate didn't recognise
@@ -63,6 +64,11 @@ const need = (role: Role): express.RequestHandler => (req, res, next) =>
 const publicUrl = () => (PUBLIC_HOSTS[0] ? `https://${PUBLIC_HOSTS[0]}` : null);
 /** Where agents connect: on this Mac, and over Tailscale. */
 const mcpUrls = () => ({ local: `http://127.0.0.1:${PORT}/mcp`, remote: publicUrl() ? `${publicUrl()}/mcp` : null });
+
+/** The Claude plan's usage, which steers the model each comment runs on (editors see it next to the comments). */
+app.get("/api/usage", need("editor"), async (req, res) => {
+  res.json(await readUsage(req.query.fresh === "1"));
+});
 
 app.get("/api/me", (req, res) => {
   const p = personOf(req);
@@ -413,6 +419,7 @@ app.post("/api/projects/:id/comments", withProject((p, req, res) => {
   if (b.target?.kind === "build") return res.status(400).json({ error: "use the build endpoint" });
   res.json(room.postComment(p, me(req), b));
 }));
+app.post("/api/projects/:id/comments/:cid/run", withProject((p, req, res) => res.json(room.release(p, me(req), String(req.params.cid), req.body?.tier))));
 app.post("/api/projects/:id/comments/:cid/approve", withProject((p, req, res) => res.json(room.approve(p, me(req), String(req.params.cid)))));
 app.post("/api/projects/:id/comments/:cid/decline", withProject((p, req, res) => res.json(room.decline(p, me(req), String(req.params.cid), req.body?.reason))));
 app.post("/api/projects/:id/comments/:cid/stop", withProject((p, req, res) => res.json(room.stopComment(p, me(req), String(req.params.cid)))));
