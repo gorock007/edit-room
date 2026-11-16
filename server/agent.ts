@@ -245,7 +245,7 @@ async function runOne(p: Project, commentId: string, hooks: Hooks) {
       x.status = "held";
       x.held = hold;
       x.route = chosen;
-      x.activity.push({ at: Date.now(), kind: "info", text: `Waiting: ${hold}` });
+      x.activity.push({ at: Date.now(), kind: "info", text: "Waiting for an editor to start it" }); // the reason (plan usage) is in held, editors only
     });
     return;
   }
@@ -253,7 +253,7 @@ async function runOne(p: Project, commentId: string, hooks: Hooks) {
     x.status = "working";
     x.held = undefined;
     x.route = chosen;
-    x.activity.push({ at: Date.now(), kind: "info", text: `Claude picked this up on ${chosen.label} (${chosen.why}${chosen.stepped ? `; ${chosen.stepped}` : ""})` });
+    x.activity.push({ at: Date.now(), kind: "info", text: "Claude picked this up" }); // the model and why are in route, editors only
   })!;
   // Opus comments continue the project's one conversation, so Claude remembers the earlier ones (and its prompt cache
   // stays warm). A quick Sonnet fix starts fresh: replaying a long Opus conversation on another model costs more than

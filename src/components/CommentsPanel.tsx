@@ -184,9 +184,7 @@ function Card({ c, focused, editor, approver, mine, onFocus, onSeek, onStop, onU
                   Run on Opus
                 </button>
               </div>
-            ) : (
-              <div className="mt-1 text-ink-400">An editor can start it.</div>
-            )}
+            ) : null}
           </div>
         )}
 

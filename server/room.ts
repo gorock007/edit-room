@@ -8,7 +8,7 @@ import { enqueue, stop } from "./agent.ts";
 import { KEYS, applyOption, hasOption } from "./options.ts";
 import { OWNER, can, type Person } from "./people.ts";
 import { loadComments, newId, restore, saveComments, updateComment, type Author, type Comment, type Target, type Tier } from "./store.ts";
-import { TIERS, TIER_NAMES } from "./router.ts";
+import { TIER_NAMES } from "./router.ts";
 import { info, nameVersion, record, restoreFiles, same, syncOutside, versions, type Version } from "./versions.ts";
 
 /**
@@ -58,6 +58,8 @@ export const viewOf = (c: Comment, who: Person | undefined): Comment =>
         options: c.options?.map(({ key, note, pictureChanged, picture }) => ({ key, note: redact(note)!, files: [], pictureChanged, picture })),
         costUsd: undefined,
         route: undefined,
+        // the reason names the owner's plan usage; clients only need to know it waits
+        held: c.held ? "Waiting for an editor to start it." : undefined,
       };
 
 const KINDS = new Set(["caption", "frame", "sfx", "cut", "broll", "general"]);
@@ -214,7 +216,7 @@ export function makeRoom(e: Emitters) {
         x.status = "queued";
         x.pick = tier;
         x.held = undefined;
-        x.activity.push({ at: Date.now(), kind: "info", text: `${who.name} started it on ${TIERS[tier].label}` });
+        x.activity.push({ at: Date.now(), kind: "info", text: `${who.name} started it` });
       });
       if (!c || !ok) throw new RoomError(400, "this comment isn't waiting");
       e.emitComment(c);
