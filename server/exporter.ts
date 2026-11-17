@@ -122,11 +122,23 @@ function renderCaptions(p: Project, work: string, onStage: (s: string) => void):
   });
 }
 
-/** Rebuild index.html with the overlay's own build_captions.py. Returns an error message, or null when fine. */
+/**
+ * Rebuild index.html from the draft as it is now. Only the skill's own build_captions.py is ever run, never a copy
+ * from the edit folder: agents (started by any commenter) can write there, and this runs outside their sandbox.
+ * The skill's copy is run only when the edit's copy is the same version, so the export lays out what the preview
+ * shows; an edit whose builder was changed keeps its index.html as it is. Returns an error message, or null.
+ */
+const TRUSTED_BUILDER = path.join(SKILL_DIR, "assets/overlay-template/build_captions.py");
 function relayCaptions(p: Project): string | null {
   const dir = p.overlaysDir;
-  if (!dir || !fs.existsSync(path.join(dir, "build_captions.py")) || !fs.existsSync(path.join(dir, "captions.json"))) return null;
-  const r = spawnSync("python3", ["-I", "build_captions.py"], { cwd: dir, encoding: "utf8", timeout: 60_000 });
+  const own = dir && path.join(dir, "build_captions.py");
+  if (!dir || !own || !fs.existsSync(own) || !fs.existsSync(path.join(dir, "captions.json")) || !fs.existsSync(TRUSTED_BUILDER)) return null;
+  const sha = (f: string) => crypto.createHash("sha256").update(fs.readFileSync(f)).digest("hex");
+  if (sha(own) !== sha(TRUSTED_BUILDER)) {
+    console.log(`export ${p.id}: overlays/build_captions.py differs from the skill's, so captions are not laid out again`);
+    return null;
+  }
+  const r = spawnSync("python3", ["-I", TRUSTED_BUILDER, dir], { cwd: os.tmpdir(), encoding: "utf8", timeout: 60_000 });
   if (r.status === 0) return null;
   const why = `${r.stderr ?? ""}${r.stdout ?? ""}`.trim().split("\n").slice(-3).join("\n") || String(r.error ?? "unknown error");
   return `captions could not be laid out (build_captions.py): ${why}`;
