@@ -8,7 +8,7 @@ import { ALLOWED_HOSTS, ALLOWED_ORIGINS, HOST, PORT, PUBLIC_HOSTS, READ_ROOTS, R
 import { getProject, listProjects, readModel, type Project } from "./projects.ts";
 import { buildProxy, proxyFile, proxyState } from "./proxy.ts";
 import { exportFile, exportName, exportState } from "./exporter.ts";
-import { enqueue, quiet } from "./agent.ts";
+import { enqueue, quiet, recoverInterrupted } from "./agent.ts";
 import { KEYS, hasOption, optionProject } from "./options.ts";
 import { dropSessions, hasPassword, isRemote, login, logout, needsLogin, personOf, startSession } from "./auth.ts";
 import {
@@ -561,6 +561,9 @@ app.get("/{*any}", (_req, res) => {
   const index = path.join(dist, "index.html");
   fs.existsSync(index) ? res.set("Cache-Control", "no-cache").sendFile(index) : res.status(404).send("Not built yet: run npm run build");
 });
+
+const cutOff = recoverInterrupted(listProjects());
+if (cutOff) console.log(`marked ${cutOff} comment(s) stopped: they were cut off when the server last closed`);
 
 localServer.listen(PORT, HOST, () => console.log(`edit room server on http://${HOST}:${PORT} (this Mac)`));
 remoteServer.listen(REMOTE_PORT, "127.0.0.1", () => console.log(`login-only port for tailscale serve on http://127.0.0.1:${REMOTE_PORT}`));

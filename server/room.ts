@@ -4,7 +4,7 @@ import { CAPCUT_DRAFTS, DATA_DIR, SKILL_DIR, VIDEO_ROOT } from "./config.ts";
 import { readModel, type Project } from "./projects.ts";
 import { buildProxy, proxyState } from "./proxy.ts";
 import { exportState, startExport } from "./exporter.ts";
-import { enqueue, stop } from "./agent.ts";
+import { INTERRUPTED, enqueue, isRunning, stop } from "./agent.ts";
 import { KEYS, applyOption, hasOption } from "./options.ts";
 import { OWNER, can, type Person } from "./people.ts";
 import { loadComments, newId, restore, saveComments, updateComment, type Author, type Comment, type Target, type Tier } from "./store.ts";
@@ -233,6 +233,12 @@ export function makeRoom(e: Emitters) {
         throw new RoomError(403, "Only editors can stop a comment Claude is working on.");
       const c = updateComment(p, cid, (x) => {
         if (x.status === "queued" || x.status === "pending" || x.status === "held") x.status = "stopped";
+        // working, but no agent behind it (cut off by a server restart): nothing to abort, so stop it here
+        else if (x.status === "working" && !isRunning(cid)) {
+          x.status = "stopped";
+          x.reply = INTERRUPTED;
+          x.activity = [...(x.activity ?? []), { at: Date.now(), kind: "error", text: INTERRUPTED }];
+        }
       })!;
       stop(cid);
       e.emitComment(c);

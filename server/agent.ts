@@ -6,7 +6,7 @@ import { z } from "zod";
 import { CAPCUT_DRAFTS, DATA_DIR, READ_ROOTS, SKILL_DIR, VIDEO_ROOT, WRITE_ROOTS, inside } from "./config.ts";
 import { getProject, onScreen, readModel, type Project } from "./projects.ts";
 import { buildProxy, grabFrame, proxyFile, proxyState } from "./proxy.ts";
-import { changedSince, loadComments, restore, snapshot, updateComment, type Activity, type Comment } from "./store.ts";
+import { changedSince, loadComments, restore, saveComments, snapshot, updateComment, type Activity, type Comment } from "./store.ts";
 import { KEYS, optionProject, saveOption, saveOptionFrom } from "./options.ts";
 import { bringHome, dropWorkspace, makeWorkspaces, type Workspace } from "./workspace.ts";
 import { ALL, coveredBy } from "../src/safezones.ts";
@@ -389,6 +389,35 @@ export function enqueue(p: Project, commentId: string, hooks: Hooks) {
 
 export function stop(commentId: string) {
   aborts.get(commentId)?.abort();
+}
+
+/** True while an agent is actually running this comment in this server process. */
+export const isRunning = (commentId: string) => aborts.has(commentId);
+
+export const INTERRUPTED =
+  "Stopped: the Edit Room server was closed while Claude was on this, so it ended part way. Check the edit, then send the comment again to redo it.";
+
+/**
+ * Jobs live only in this process (queues, aborts). A comment still marked working or queued when the server
+ * starts was cut off by the last shutdown: nothing is behind it, and left alone it shows "working" for ever and
+ * keeps the room thinking an agent is busy. Mark each one stopped and say why.
+ */
+export function recoverInterrupted(projects: Project[]) {
+  let n = 0;
+  for (const p of projects) {
+    const list = loadComments(p);
+    let changed = false;
+    for (const c of list) {
+      if (c.status !== "working" && c.status !== "queued") continue;
+      c.status = "stopped";
+      c.reply = INTERRUPTED;
+      c.activity = [...(c.activity ?? []), { at: Date.now(), kind: "error", text: INTERRUPTED }];
+      changed = true;
+      n++;
+    }
+    if (changed) saveComments(p, list);
+  }
+  return n;
 }
 
 // ---- options, all at once ----
