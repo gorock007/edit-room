@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { SKILL_DIR } from "./config.ts";
 import { draftMediaFiles, mediaStamp, type Project } from "./projects.ts";
 
@@ -122,6 +122,16 @@ function renderCaptions(p: Project, work: string, onStage: (s: string) => void):
   });
 }
 
+/** Rebuild index.html with the overlay's own build_captions.py. Returns an error message, or null when fine. */
+function relayCaptions(p: Project): string | null {
+  const dir = p.overlaysDir;
+  if (!dir || !fs.existsSync(path.join(dir, "build_captions.py")) || !fs.existsSync(path.join(dir, "captions.json"))) return null;
+  const r = spawnSync("python3", ["-I", "build_captions.py"], { cwd: dir, encoding: "utf8", timeout: 60_000 });
+  if (r.status === 0) return null;
+  const why = `${r.stderr ?? ""}${r.stdout ?? ""}`.trim().split("\n").slice(-3).join("\n") || String(r.error ?? "unknown error");
+  return `captions could not be laid out (build_captions.py): ${why}`;
+}
+
 export function exportState(p: Project): ExportState {
   const r = running.get(p.id);
   if (r) return { status: "running", stage: r.stage };
@@ -138,6 +148,14 @@ export function startExport(p: Project, onChange: () => void): ExportState {
   if (!p.draftDir) throw new Error("this edit has no CapCut draft yet");
   if (running.has(p.id)) return exportState(p);
   errors.delete(p.id);
+  // lay the captions out again from the draft as it is now (build_captions.py reads where the cards and wall
+  // titles are), so a change made after the captions were built can't put a caption on top of a graphic
+  const relaid = relayCaptions(p);
+  if (relaid) {
+    errors.set(p.id, relaid);
+    onChange();
+    return exportState(p);
+  }
   const overlay = p.overlaysDir ? overlayHash(p) : undefined;
   const work = path.join(os.homedir(), "Movies", "claude_render", "edit-room-export", p.id);
   const tmp = path.join(p.dataDir, "export.tmp.mp4");
