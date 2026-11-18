@@ -2,12 +2,13 @@ import os from "node:os";
 import path from "node:path";
 import { CAPCUT_DRAFTS, DATA_DIR, SKILL_DIR, VIDEO_ROOT } from "./config.ts";
 import { readModel, type Project } from "./projects.ts";
-import { buildProxy, proxyState } from "./proxy.ts";
+import { buildProxy, patchProxy, proxyState, pruneKeptProxies, restoreKeptProxy } from "./proxy.ts";
 import { exportState, startExport } from "./exporter.ts";
-import { INTERRUPTED, enqueue, isRunning, stop } from "./agent.ts";
+import { INTERRUPTED, enqueue, isRunning, quiet, stop } from "./agent.ts";
+import { CutError, applyCut, transcript } from "./cut.ts";
 import { KEYS, applyOption, hasOption } from "./options.ts";
 import { OWNER, can, type Person } from "./people.ts";
-import { loadComments, newId, restore, saveComments, updateComment, type Author, type Comment, type Target, type Tier } from "./store.ts";
+import { changedSince, loadComments, newId, restore, saveComments, snapshot, updateComment, type Author, type Comment, type Target, type Tier } from "./store.ts";
 import { TIER_NAMES } from "./router.ts";
 import { info, nameVersion, record, restoreFiles, same, syncOutside, versions, type Version } from "./versions.ts";
 
@@ -102,6 +103,9 @@ export function targetFromModel(p: Project, kind: string, id: string): { target:
   }
   throw new RoomError(400, `no ${kind} with id "${id}" in this edit (get_edit lists the ids)`);
 }
+
+/** Projects with a direct cut in progress (one at a time). */
+const cutting = new Set<string>();
 
 export function makeRoom(e: Emitters) {
   /** Save a version (fn) and tell the room if one was added. */
@@ -258,9 +262,75 @@ export function makeRoom(e: Emitters) {
       })!;
       e.emitComment(u);
       if (c.changed.some((f) => f.endsWith("index.html"))) e.overlayChanged(p);
-      if (proxyState(p).status === "stale") buildProxy(p, () => e.projectChanged(p));
+      if (proxyState(p).status === "stale" && !(c.direct && restoreKeptProxy(p, cid))) buildProxy(p, () => e.projectChanged(p));
       e.projectChanged(p);
       return u;
+    },
+
+    transcript(p: Project) {
+      return transcript(p);
+    },
+
+    /**
+     * Cut [a, b) seconds out of the edit directly: no Claude, no waiting. It is listed with the comments (so it has
+     * Undo and shows who did it) and saved as a version like any other change.
+     */
+    async cut(p: Project, who: Person, b: { a?: unknown; b?: unknown; label?: unknown }) {
+      needRole(who, "editor");
+      const from = num(b.a, 0, 86_400), to = num(b.b, 0, 86_400);
+      if (from == null || to == null || to <= from) throw new RoomError(400, "pick what to cut first");
+      if (agentBusy(p) || loadComments(p).some((c) => c.status === "queued")) throw new RoomError(409, "Claude is working on this edit. Wait for it to finish, then cut.");
+      if (cutting.has(p.id)) throw new RoomError(409, "The last cut is still being made.");
+      cutting.add(p.id);
+      quiet.add(p.id); // one refresh at the end, not one per file written
+      const cid = newId();
+      try {
+        outside(p);
+        const wasReady = proxyState(p).status === "ready";
+        snapshot(p, cid);
+        let r;
+        try {
+          r = applyCut(p, from, to);
+        } catch (err: any) {
+          restore(p, cid, changedSince(p, cid));
+          throw err instanceof CutError ? new RoomError(400, err.message) : err;
+        }
+        const changed = changedSince(p, cid);
+        const said = short(b.label, 80);
+        const what = r.words.length ? `“${r.words.join(" ").slice(0, 80)}”` : said || "a pause";
+        const len = r.b - r.a;
+        const secs = (n: number) => `${n.toFixed(2)} s`;
+        const sounds = [r.soundsDropped ? `${r.soundsDropped} sound${r.soundsDropped > 1 ? "s" : ""} that went with ${r.words.length > 1 ? "those words" : "it"} removed` : "", r.soundsMoved ? `${r.soundsMoved} sound${r.soundsMoved > 1 ? "s" : ""} moved to the join` : ""].filter(Boolean).join(", ");
+        const c: Comment = {
+          id: cid,
+          project: p.id,
+          createdAt: Date.now(),
+          text: `Cut ${what}`,
+          t: Math.max(0, r.a - 1),
+          x: null,
+          y: null,
+          target: { kind: "cut", label: "the transcript", detail: `${secs(r.a)} to ${secs(r.b)}` },
+          status: "done",
+          activity: [{ at: Date.now(), kind: "info", text: `${who.name} cut ${secs(len)} directly` }],
+          reply: `Removed ${secs(len)} at ${secs(r.a)}. The video is now ${secs(r.duration)}.${sounds ? ` ${sounds[0].toUpperCase()}${sounds.slice(1)}.` : ""}`,
+          changed,
+          finishedAt: Date.now(),
+          want: 1,
+          author: authorOf(who),
+          direct: true,
+        };
+        saveComments(p, [...loadComments(p), c]);
+        rec(p, () => record(p, { kind: "comment", what: c.text, by: c.author, comment: cid }));
+        await patchProxy(p, cid, r, wasReady, () => e.projectChanged(p));
+        pruneKeptProxies(p, loadComments(p).filter((x) => x.direct && x.status === "done").slice(-5).map((x) => x.id));
+        e.emitComment(c);
+        e.overlayChanged(p);
+        e.projectChanged(p);
+        return { comment: c, at: r.a, duration: r.duration };
+      } finally {
+        quiet.delete(p.id);
+        cutting.delete(p.id);
+      }
     },
 
     /** Use one of a comment's options (A, B, C…), or "current" to keep the edit as it is. */

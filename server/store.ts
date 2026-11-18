@@ -52,6 +52,7 @@ export type Comment = {
   pick?: Tier | "auto"; // the model the poster asked for (editors only); auto = the router decides
   route?: Route; // what it ran on, and why
   held?: string; // why it is waiting (status "held")
+  direct?: boolean; // made by the person directly (a cut from the transcript), not by Claude
 };
 
 const file = (p: Project) => path.join(p.dataDir, "comments.json");

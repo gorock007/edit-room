@@ -426,6 +426,10 @@ app.post("/api/projects/:id/comments/:cid/stop", withProject((p, req, res) => re
 app.post("/api/projects/:id/comments/:cid/undo", withProject((p, req, res) => res.json(room.undo(p, me(req), String(req.params.cid)))));
 app.post("/api/projects/:id/comments/:cid/pick", withProject((p, req, res) => res.json(room.pick(p, me(req), String(req.params.cid), String(req.body?.key ?? "")))));
 
+// ---- the transcript, and cutting words or pauses straight from it (no Claude; see cut.ts) ----
+app.get("/api/projects/:id/transcript", withProject((p, _req, res) => res.json(room.transcript(p))));
+app.post("/api/projects/:id/cut", withProject(async (p, req, res) => res.json(await room.cut(p, me(req), req.body ?? {}))));
+
 // ---- version history: list, name, restore, and preview any version next to the current edit ----
 const versionN = (req: express.Request) => {
   const n = Number(req.params.n);

@@ -83,3 +83,93 @@ export async function grabFrame(p: Project, t: number, x: number | null, y: numb
   }
   await run("ffmpeg", ["-nostdin", "-v", "error", "-y", "-ss", t.toFixed(3), "-i", proxyFile(p), "-frames:v", "1", "-vf", vf.join(","), out]);
 }
+
+// ---- a direct cut (cut.ts): the preview is patched in a couple of seconds instead of rebuilt in a minute ----
+
+const keepDir = (p: Project, cid: string) => path.join(p.dataDir, "history", cid);
+/** After this many patches in a row the proxy is rebuilt from the footage, so re-encoding never piles up. */
+const MAX_PATCHES = 8;
+
+/**
+ * Take frames [af, bf) out of the proxy itself (picture and voice), which is exactly what the cut did to the edit.
+ * Only when the proxy matched the edit before the cut (`wasReady`); otherwise it is rebuilt as usual. The proxy as it
+ * was is kept with the cut's undo snapshot, so undoing brings the old picture back at once too.
+ */
+export async function patchProxy(p: Project, cid: string, cut: { af: number; bf: number; fps: number; frames: number }, wasReady: boolean, onChange: () => void): Promise<void> {
+  const prev = fs.existsSync(meta(p)) ? JSON.parse(fs.readFileSync(meta(p), "utf8")) : null;
+  if (!wasReady || !prev || building.has(p.id) || (prev.patches ?? 0) >= MAX_PATCHES || cut.fps !== 30) {
+    buildProxy(p, onChange);
+    return;
+  }
+  const job = (async () => {
+    const { af, bf, fps } = cut;
+    fs.mkdirSync(keepDir(p, cid), { recursive: true });
+    fs.rmSync(path.join(keepDir(p, cid), "proxy.mp4"), { force: true });
+    fs.linkSync(proxyFile(p), path.join(keepDir(p, cid), "proxy.mp4")); // a link: the patch below writes a new file
+    fs.writeFileSync(path.join(keepDir(p, cid), "proxy.json"), JSON.stringify(prev));
+    const a = (af / fps).toFixed(5), b = (bf / fps).toFixed(5);
+    // picture: by frame number (timestamps are rewritten first, so a proxy with uneven ones still cuts on the frame);
+    // voice: by time. -reinit_filter 0: a proxy whose cards and A-roll carry different colour tags must not restart
+    // the filters part way, which would restart the frame count.
+    const parts = [`[0:v]setpts=N/(${fps}*TB),select='not(between(n,${af},${bf - 1}))',setpts=N/(${fps}*TB)[v]`];
+    const au: string[] = [];
+    if (af > 0) parts.push(`[0:a]atrim=end=${a},asetpts=PTS-STARTPTS[a0]`), au.push("[a0]");
+    parts.push(`[0:a]atrim=start=${b},asetpts=PTS-STARTPTS[a1]`), au.push("[a1]");
+    parts.push(`${au.join("")}concat=n=${au.length}:v=0:a=1[a]`);
+    const tmp = path.join(p.dataDir, "proxy.tmp.mp4");
+    await run("ffmpeg", ["-nostdin", "-v", "error", "-y", "-reinit_filter", "0", "-i", proxyFile(p), "-filter_complex", parts.join(";"), "-map", "[v]", "-map", "[a]",
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", String(fps), "-fps_mode", "cfr", "-c:a", "aac", "-b:a", "160k",
+      "-frames:v", String(cut.frames), "-movflags", "+faststart", tmp]);
+    const got = await frameCount(tmp);
+    if (got !== cut.frames) throw new Error(`patched proxy has ${got} frames, the cut has ${cut.frames}`);
+    const model = readModel(p);
+    fs.renameSync(tmp, proxyFile(p));
+    fs.writeFileSync(meta(p), JSON.stringify({ hash: model.pictureHash, media: model.pictureMedia, builtAt: Date.now(), version: (prev.version ?? 0) + 1, patches: (prev.patches ?? 0) + 1 }));
+  })()
+    .catch(() => {
+      building.delete(p.id);
+      return buildProxy(p, onChange); // the patch failed: build it the long way
+    })
+    .finally(() => {
+      building.delete(p.id);
+      onChange();
+    });
+  building.set(p.id, job);
+  await job;
+}
+
+function frameCount(file: string): Promise<number> {
+  return new Promise((resolve) => {
+    const ch = spawn("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=nb_frames", "-of", "csv=p=0", file]);
+    let out = "";
+    ch.stdout.on("data", (b) => (out += b));
+    ch.on("close", () => resolve(Number(out.trim()) || -1));
+    ch.on("error", () => resolve(-1));
+  });
+}
+
+/** Undoing a direct cut: if the proxy kept with it is the picture of the edit as restored, put it back. */
+export function restoreKeptProxy(p: Project, cid: string): boolean {
+  try {
+    const file = path.join(keepDir(p, cid), "proxy.mp4");
+    const kept = JSON.parse(fs.readFileSync(path.join(keepDir(p, cid), "proxy.json"), "utf8"));
+    const model = readModel(p);
+    if (building.has(p.id) || !fs.existsSync(file) || kept.hash !== model.pictureHash || (kept.media !== undefined && kept.media !== model.pictureMedia)) return false;
+    const now = fs.existsSync(meta(p)) ? JSON.parse(fs.readFileSync(meta(p), "utf8")) : { version: 0 };
+    const tmp = path.join(p.dataDir, "proxy.tmp.mp4");
+    fs.copyFileSync(file, tmp);
+    fs.renameSync(tmp, proxyFile(p));
+    fs.writeFileSync(meta(p), JSON.stringify({ ...kept, version: (now.version ?? 0) + 1 }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Kept proxies are only for undoing the latest cuts: drop the rest (each is a full copy of the preview). */
+export function pruneKeptProxies(p: Project, keep: string[]) {
+  const dir = path.join(p.dataDir, "history");
+  try {
+    for (const cid of fs.readdirSync(dir)) if (!keep.includes(cid)) fs.rmSync(path.join(dir, cid, "proxy.mp4"), { force: true });
+  } catch {}
+}

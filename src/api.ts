@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Comment, EditModel, ExportState, Invite, McpUrls, Person, PersonFull, Presence, ProjectInfo, ProxyState, RawInfo, Role, Target, Tier, Usage, VersionInfo, Pick } from "./types";
+import type { Comment, EditModel, ExportState, Invite, McpUrls, Person, PersonFull, Presence, ProjectInfo, ProxyState, RawInfo, Role, Target, Tier, Transcript, Usage, VersionInfo, Pick } from "./types";
 
 /** Fired when the server says this device's session is gone; the app swaps to the login screen. */
 export const LOGIN_EVENT = "room:login";
@@ -57,6 +57,8 @@ export const api = {
   exportState: (id: string) => fetch(`/api/projects/${id}/export`).then(j<ExportState>),
   startExport: (id: string) => fetch(`/api/projects/${id}/export`, { method: "POST" }).then(j<ExportState>),
   fileUrl: (id: string, path: string) => `/media/${id}/file?p=${encodeURIComponent(path)}`,
+  transcript: (id: string) => fetch(`/api/projects/${id}/transcript`).then(j<Transcript>),
+  cut: (id: string, a: number, b: number, label: string) => postJson(`/api/projects/${id}/cut`, { a, b, label }).then(j<{ comment: Comment; at: number; duration: number }>),
   versions: (id: string) => fetch(`/api/projects/${id}/versions`).then(j<{ versions: VersionInfo[]; current: number | null }>),
   nameVersion: (id: string, n: number, label: string) => postJson(`/api/projects/${id}/versions/${n}/name`, { label }).then(j<VersionInfo>),
   restoreVersion: (id: string, n: number) => fetch(`/api/projects/${id}/versions/${n}/restore`, { method: "POST" }).then(j<VersionInfo | null>),

@@ -12,6 +12,8 @@ export type ExportReport = {
   audio: string; size_mb: number; duration: number; lufs: number; true_peak: number;
 };
 export type ExportState = { status: "none" | "running" | "ready" | "stale" | "failed"; stage?: string; error?: string; report?: ExportReport; savedTo?: string; at?: number };
+export type Word = { i: number; g: number; t: string; s: number; e: number };
+export type Transcript = { words: Word[]; duration: number; fps: number; canCut: boolean; why?: string };
 export type ProxyState = { status: "missing" | "ready" | "stale" | "building" | "failed"; error?: string; version: number };
 export type ProjectInfo = { id: string; name: string; hasDraft: boolean; hasOverlay: boolean; hasRaw: boolean };
 export type RawInfo = { files: { name: string; size: number }[]; pending: { name: string; size: number; received: number }[]; note: string };
@@ -44,7 +46,7 @@ export type Comment = {
   target: Target; status: "pending" | "held" | "declined" | "queued" | "working" | "review" | "done" | "failed" | "stopped" | "undone";
   activity: Activity[]; reply?: string; changed?: string[]; costUsd?: number; finishedAt?: number;
   want?: number; options?: Option[]; chosen?: string; author?: Author; approvedBy?: string;
-  pick?: Tier | "auto"; route?: Route; held?: string;
+  pick?: Tier | "auto"; route?: Route; held?: string; direct?: boolean;
 };
 /** Which model a comment runs on: light = Sonnet · low, standard = Opus · medium, deep = Opus · high. */
 export type Tier = "light" | "standard" | "deep";
