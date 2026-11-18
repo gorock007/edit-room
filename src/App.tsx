@@ -761,15 +761,15 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
                 )}
               </div>
               {narrow && (
-                <div className="flex shrink-0 border-t border-white/5 bg-ink-900 px-3">
+                <div className="flex shrink-0 overflow-x-auto border-t border-white/5 bg-ink-900 px-2">
                   {(["comments", "words", "checks", "timeline", "history"] as const).map((k) => (
                     <button
                       key={k}
                       onClick={() => setTab(k)}
-                      className={cx("-mb-px border-b-2 px-2 py-2.5 text-[13px] font-medium capitalize", tab === k ? "border-gold text-ink-100" : "border-transparent text-ink-400")}
+                      className={cx("-mb-px shrink-0 whitespace-nowrap border-b-2 px-1.5 py-2.5 text-[12.5px] font-medium capitalize", tab === k ? "border-gold text-ink-100" : "border-transparent text-ink-400")}
                     >
                       {k}
-                      {k === "comments" && comments.length > 0 && <span className="ml-1.5 text-ink-500">{comments.length}</span>}
+                      {k === "comments" && comments.length > 0 && <span className="ml-1 text-ink-500">{comments.length}</span>}
                       {k === "checks" && openChecks > 0 && <span className="ml-1 rounded-full bg-gold px-1 text-[10px] font-bold text-ink-950">{openChecks}</span>}
                     </button>
                   ))}
