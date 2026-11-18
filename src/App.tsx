@@ -6,6 +6,7 @@ import { MeContext } from "./room";
 import { Avatar, SharePanel } from "./components/People";
 import { ROLE_INFO } from "./Join";
 import { VersionsPanel } from "./components/VersionsPanel";
+import { TranscriptPanel } from "./components/TranscriptPanel";
 import type { VersionInfo } from "./types";
 import { clamp, cx, fmt } from "./util";
 import { Stage, type StageHandle } from "./components/Stage";
@@ -69,8 +70,8 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
   const [presence, setPresence] = useState<Presence[]>([]);
   const [sharing, setSharing] = useState(false);
   const narrow = useNarrow();
-  const [tab, setTab] = useState<"comments" | "timeline" | "history">("comments");
-  const [side, setSide] = useState<"comments" | "history">("comments");
+  const [tab, setTab] = useState<"comments" | "words" | "timeline" | "history">("comments");
+  const [side, setSide] = useState<"comments" | "words" | "history">("comments");
   // version history, and the version being compared side by side with the current edit
   const [history, setHistory] = useState<{ versions: VersionInfo[]; current: number | null }>({ versions: [], current: null });
   const [compareVer, setCompareVer] = useState<number | null>(null);
@@ -440,7 +441,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
   // the Comments / History switch at the top of the side panel
   const sideHeader = (
     <div className="flex rounded-lg bg-ink-950 p-0.5 ring-1 ring-white/5">
-      {(["comments", "history"] as const).map((k) => (
+      {(["comments", "words", "history"] as const).map((k) => (
         <button
           key={k}
           onClick={() => setSide(k)}
@@ -737,11 +738,11 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
               </div>
               {narrow && (
                 <div className="flex shrink-0 border-t border-white/5 bg-ink-900 px-3">
-                  {(["comments", "timeline", "history"] as const).map((k) => (
+                  {(["comments", "words", "timeline", "history"] as const).map((k) => (
                     <button
                       key={k}
                       onClick={() => setTab(k)}
-                      className={cx("-mb-px border-b-2 px-3 py-2.5 text-[13px] font-medium capitalize", tab === k ? "border-gold text-ink-100" : "border-transparent text-ink-400")}
+                      className={cx("-mb-px border-b-2 px-2.5 py-2.5 text-[13px] font-medium capitalize", tab === k ? "border-gold text-ink-100" : "border-transparent text-ink-400")}
                     >
                       {k}
                       {k === "comments" && comments.length > 0 && <span className="ml-1.5 text-ink-500">{comments.length}</span>}
@@ -785,7 +786,24 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
             onShowComment={showComment}
           />
         )}
-        {(narrow ? tab === "comments" : side === "comments" || !model) && pid !== NEW && !(showNew && comments.length === 0) && (
+        {(narrow ? tab === "words" : side === "words") && model && pid && pid !== NEW && !comparing && (
+          <TranscriptPanel
+            header={narrow ? undefined : sideHeader}
+            full={narrow}
+            pid={pid}
+            model={model}
+            time={time}
+            playing={playing}
+            canEdit={editor}
+            busy={busy > 0 || comments.some((c) => c.status === "queued")}
+            stamp={`${model.draftMtime}:${model.duration}:${overlayAt}`}
+            onSeek={seek}
+            onPlay={() => leader()?.video?.play().catch(() => {})}
+            onPause={() => leader()?.video?.pause()}
+            onError={setError}
+          />
+        )}
+        {(narrow ? tab === "comments" : side === "comments" || !model || (side === "words" && comparing)) && pid !== NEW && !(showNew && comments.length === 0) && (
         <CommentsPanel
           header={narrow || !model ? undefined : sideHeader}
           noComposer={showNew}

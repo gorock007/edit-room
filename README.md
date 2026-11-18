@@ -14,6 +14,14 @@ npm run dev        # server on :4310 + app on http://127.0.0.1:5310 (also keeps 
 - **Comments**: press `C`, click a caption word, a spot in the frame, or anything on the timeline. The comment goes to
   a Claude Agent SDK session (your Claude login, your skills and memory) the moment you send it. Comments on one
   project run one at a time; each shows live steps, Claude's reply, and **Undo** (restores every file it changed).
+- **Words**: the **Words** tab (next to Comments) is the edit's transcript. Click a word to go there; drag across words
+  or pauses (or shift-click) and press `Delete` to cut them. `I` and `O` mark a range at the playhead for a sound the
+  words don't show (a stutter, a breath). **Hear it first** plays across the cut before anything changes. A cut runs
+  without Claude (`server/cut.ts`): every track of the draft closes up on the frame grid, caption words and their
+  sounds go with it, captions are laid out again, and the preview is patched in about two seconds. It is listed with
+  the comments (Undo, who did it) and saved as a version. It needs the edit's `overlays/build_captions.py` to be the
+  skill's current one (older edits say so, and take the cut as a comment instead), and it won't split a clip that has
+  a moving zoom.
 - **Options**: pick "2 options" or "3 options" in the comment box. A short Sonnet call plans clearly different takes,
   then Claude makes them **all at once**, each in its own sealed copy of the project (`server/workspace.ts`): the edit
   folder and draft mirrored under `data/<project>/work/`, text files copied with their full paths rewritten to the

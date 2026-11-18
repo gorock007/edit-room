@@ -221,7 +221,11 @@ function Card({ c, focused, editor, approver, mine, onFocus, onSeek, onStop, onU
 
         {c.reply && !live && (
           <div className="mt-2.5 flex gap-2">
-            {c.status === "declined" ? null : <div className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-gold text-[10px] font-bold text-ink-950">C</div>}
+            {c.status === "declined" ? null : c.direct ? (
+              <div className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white/10 text-[11px] text-ink-200" title="Cut directly from the words, without Claude">✂</div>
+            ) : (
+              <div className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-gold text-[10px] font-bold text-ink-950">C</div>
+            )}
             <p className="text-[13px] leading-snug text-ink-200">{c.reply}</p>
           </div>
         )}
