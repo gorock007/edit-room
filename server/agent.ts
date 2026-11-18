@@ -51,6 +51,14 @@ How the preview is built, so your change shows up:
   call the room_refresh_picture tool after such a change.
 - room_check watches and listens to the preview for you (pauses, caption sync, clipped or repeated words, colour
   jumps). After a change to cuts or caption timing, call it if you are not sure the result is clean.
+- Stage-format edits (the edit folder has edit-data/stage_shots.json; the skill's references/stage.md) are built
+  differently: the captions in overlays/ are the skill's line captions (scripts/line_captions.py from
+  edit-data/caption_words.json + overlays/lines.txt + stage_shots.json), not build_captions.py groups. Change a
+  caption by editing lines.txt (or the words file) and re-running line_captions.py into overlays/. The explainers are
+  stage shots: scenes in <edit>/stage/scenes/*.html (one per shot, times from the shot's start), rendered off iCloud,
+  then composited by scripts/stage_shot.py into the B-roll track's stage_<id>.mp4. A cut inside or before a stage
+  shot moves its words: update stage_shots.json (start/end/in/out), the scene's word times, re-render that shot, and
+  re-run line_captions.py so the caption line still rides with the card.
 - Follow the talking-head-reel-edit skill (house style, references/style.md, sfx_catalog.md for any sound choice).
 
 Rules:
