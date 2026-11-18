@@ -21,6 +21,7 @@ import { RoomError, authorOf, makeRoom, runsDirectly, viewOf } from "./room.ts";
 import { mcpHandler } from "./mcp.ts";
 import { versionProject } from "./versions.ts";
 import { readUsage } from "./usage.ts";
+import { checksState, scheduleChecks, setOk } from "./checks.ts";
 
 const app = express();
 app.set("case sensitive routing", true); // "/API/..." must not reach a route the login gate didn't recognise
@@ -208,11 +209,17 @@ const emitComment = (c: Comment) => {
     ws.send(JSON.stringify({ type: "comment", comment: viewOf(c, who) }));
   }
 };
-const projectChanged = (p: Project) => send({ type: "project", id: p.id, proxy: proxyState(p) }, p.id);
+const checksChanged = (p: Project) => send({ type: "checks", id: p.id, checks: checksState(p) }, p.id);
+/** Look the edit over again if it changed (checks.ts): cheap to call, it only runs when something is new. */
+const recheck = (p: Project) => void scheduleChecks(p, () => checksChanged(p)).catch(() => {});
+const projectChanged = (p: Project) => {
+  send({ type: "project", id: p.id, proxy: proxyState(p) }, p.id);
+  if (!quiet.has(p.id)) recheck(p);
+};
 const exportChanged = (p: Project) => send({ type: "export", id: p.id, export: exportState(p) }, p.id);
 const overlayChanged = (p: Project) => send({ type: "overlay", id: p.id, at: Date.now() }, p.id);
 const versionsChanged = (p: Project) => send({ type: "versions", id: p.id }, p.id);
-const room = makeRoom({ emitComment, projectChanged, overlayChanged, exportChanged, versionsChanged });
+const room = makeRoom({ emitComment, projectChanged, overlayChanged, exportChanged, versionsChanged, checksChanged });
 const hooks = room.hooks;
 
 type Here = ReturnType<typeof publicPerson> & { sid: string; project: string; t: number; playing: boolean; at: number };
@@ -429,6 +436,22 @@ app.post("/api/projects/:id/comments/:cid/pick", withProject((p, req, res) => re
 // ---- the transcript, and cutting words or pauses straight from it (no Claude; see cut.ts) ----
 app.get("/api/projects/:id/transcript", withProject((p, _req, res) => res.json(room.transcript(p))));
 app.post("/api/projects/:id/cut", withProject(async (p, req, res) => res.json(await room.cut(p, me(req), req.body ?? {}))));
+
+// ---- checks: what Edit Room found watching and listening to the preview (checks.ts) ----
+app.get("/api/projects/:id/checks", withProject((p, _req, res) => {
+  recheck(p);
+  res.json(checksState(p));
+}));
+app.post("/api/projects/:id/checks/ok", need("editor"), withProject((p, req, res) => {
+  setOk(p, String(req.body?.id ?? "").slice(0, 60), req.body?.ok !== false);
+  checksChanged(p);
+  res.json(checksState(p));
+}));
+app.post("/api/projects/:id/checks/run", need("editor"), withProject((p, _req, res) => {
+  fs.rmSync(path.join(p.dataDir, "checks.json"), { force: true });
+  void scheduleChecks(p, () => checksChanged(p), true).catch(() => {});
+  res.json(checksState(p));
+}));
 
 // ---- version history: list, name, restore, and preview any version next to the current edit ----
 const versionN = (req: express.Request) => {

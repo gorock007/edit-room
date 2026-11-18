@@ -13,12 +13,14 @@ import { ALL, coveredBy } from "../src/safezones.ts";
 import { rawDir, rawInfo } from "./uploads.ts";
 import { routeFor } from "./router.ts";
 import { noteRateLimit, readUsage } from "./usage.ts";
+import { checksState, checksText, scheduleChecks } from "./checks.ts";
 
 type Emit = (c: Comment) => void;
 type Hooks = {
   emit: Emit;
   projectChanged: (p: Project) => void;
   overlayChanged: (p: Project) => void;
+  checksChanged?: (p: Project) => void;
   /** about to change the files: anything changed outside Edit Room since the last version is saved first */
   starting?: (p: Project) => void;
   /** finished, and the files changed (or a first edit was built): save a version */
@@ -47,6 +49,8 @@ How the preview is built, so your change shows up:
   \`pgrep -x CapCut\` finds it running, do not write the draft; reply asking the user to quit CapCut.
 - The app shows sound changes as soon as the draft changes. Cuts, punch-ins and b-roll need the picture proxy rebuilt:
   call the room_refresh_picture tool after such a change.
+- room_check watches and listens to the preview for you (pauses, caption sync, clipped or repeated words, colour
+  jumps). After a change to cuts or caption timing, call it if you are not sure the result is clean.
 - Follow the talking-head-reel-edit skill (house style, references/style.md, sfx_catalog.md for any sound choice).
 
 Rules:
@@ -124,7 +128,9 @@ the user, with these differences:
 - Post a short progress note with room_note at the start of each big step (takes found, cut verified, grade, cards,
   draft built, preview), so the user can follow along on their phone.
 - Do not run the 9:16 version or the 4K master; the user asks for those separately.
-- When the draft is built, call room_refresh_picture so the app's preview is ready.
+- When the draft is built, call room_refresh_picture so the app's preview is ready, then room_check. Fix what it finds
+  (a pause, captions off the voice, a clipped or repeated word, a colour jump), refresh and check once more; anything
+  you leave, name in your final reply with why it is fine.
 Final reply: 2-4 short sentences: what you built, the length, and anything the user should look at first.`;
 }
 
@@ -196,6 +202,19 @@ function roomTools(p: Project, c: Comment, hooks: Hooks) {
           if (!cur.draftDir) return { content: [{ type: "text", text: "No CapCut draft found for this project yet: write edit-data/build_cfg.json (main_src inside the draft's folder) or name the draft after the project id." }], isError: true };
           await buildProxy(cur, () => hooks.projectChanged(cur));
           return { content: [{ type: "text", text: "Picture proxy rebuilt; the user's preview reloaded." }] };
+        },
+      ),
+      tool(
+        "room_check",
+        "Watch and listen to the preview for faults, without the user: leftover pauses, captions early or late against the voice, words said but not captioned (a repeat or stray word) or captioned but not said (a clipped word), colour jumps between cuts, black frames, missing media. Takes up to a minute. Call it after room_refresh_picture on a first edit, and after a change to cuts or caption timing when you want to be sure. The listening part is Whisper: treat its findings as places to listen, not proof.",
+        {},
+        async () => {
+          const cur = getProject(p.id) ?? p;
+          if (!cur.draftDir) return { content: [{ type: "text", text: "No draft yet: build the edit first." }], isError: true };
+          if (proxyState(cur).status !== "ready") await buildProxy(cur, () => hooks.projectChanged(cur));
+          if (proxyState(cur).status !== "ready") return { content: [{ type: "text", text: "The preview could not be built, so there is nothing to check." }], isError: true };
+          await scheduleChecks(cur, () => hooks.checksChanged?.(cur), true);
+          return { content: [{ type: "text", text: checksText(checksState(cur)) }] };
         },
       ),
       tool(
@@ -304,7 +323,7 @@ async function runOne(p: Project, commentId: string, hooks: Hooks) {
         settingSources: ["user", "project", "local"],
         systemPrompt: { type: "preset", preset: "claude_code", append: ROOM_PROMPT },
         permissionMode: "acceptEdits",
-        allowedTools: ["Read", "Glob", "Grep", "Bash", "Skill", "mcp__room__room_refresh_picture", "mcp__room__room_note", "mcp__room__room_save_option"],
+        allowedTools: ["Read", "Glob", "Grep", "Bash", "Skill", "mcp__room__room_refresh_picture", "mcp__room__room_note", "mcp__room__room_save_option", "mcp__room__room_check"],
         disallowedTools: ["Bash(rm -rf *)", "Bash(sudo *)", "Bash(git push*)", "WebSearch", "WebFetch"],
         mcpServers: { room: roomTools(p, c, hooks) },
         // nobody is at a prompt: anything not pre-approved is decided here, inside the project's folders only

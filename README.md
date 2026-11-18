@@ -22,6 +22,16 @@ npm run dev        # server on :4310 + app on http://127.0.0.1:5310 (also keeps 
   the comments (Undo, who did it) and saved as a version. It needs the edit's `overlays/build_captions.py` to be the
   skill's current one (older edits say so, and take the cut as a comment instead), and it won't split a clip that has
   a moving zoom.
+- **Checks**: the **Checks** tab lists what Edit Room found watching and listening to the preview, so the same faults
+  don't have to be found by hand (`server/checks.ts`). A quick pass runs after every change (a few seconds, ffmpeg
+  only): pauses over 0.45 s, a brightness or colour jump across a cut in the same shot, black frames, a hole in the
+  main track, media files the export needs that are missing. A listening pass (Whisper, `server/listen.py`, about
+  half a minute, once the edit is still) compares the voice with the captions: words said but not captioned (a
+  repeat, a stray word), captioned but not said (a clipped word, a leftover caption), and captions running early or
+  late. Click a finding to go there; **Cut it** removes a pause on the spot, **Ask Claude** sends the finding as a
+  comment with what was measured, **It's fine** stops listing it. Claude has the same checks as the `room_check` tool
+  and runs them on a first edit before it reports back. Whisper can mishear, so its findings say "listen here"; lines
+  hidden under a card and single small words are not reported.
 - **Options**: pick "2 options" or "3 options" in the comment box. A short Sonnet call plans clearly different takes,
   then Claude makes them **all at once**, each in its own sealed copy of the project (`server/workspace.ts`): the edit
   folder and draft mirrored under `data/<project>/work/`, text files copied with their full paths rewritten to the

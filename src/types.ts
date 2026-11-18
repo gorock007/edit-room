@@ -14,6 +14,14 @@ export type ExportReport = {
 export type ExportState = { status: "none" | "running" | "ready" | "stale" | "failed"; stage?: string; error?: string; report?: ExportReport; savedTo?: string; at?: number };
 export type Word = { i: number; g: number; t: string; s: number; e: number };
 export type Transcript = { words: Word[]; duration: number; fps: number; canCut: boolean; why?: string };
+export type Issue = {
+  id: string; kind: "media" | "timeline" | "pause" | "colour" | "black" | "sync" | "extra" | "missing"; level: "fix" | "look";
+  t: number; end?: number; title: string; detail?: string; cut?: { a: number; b: number }; ask?: string;
+};
+export type Checks = {
+  status: "none" | "running" | "ready" | "failed"; listened: "yes" | "running" | "waiting" | "unavailable" | "failed"; listenNote?: string;
+  at?: number; issues: Issue[]; ok: string[]; error?: string;
+};
 export type ProxyState = { status: "missing" | "ready" | "stale" | "building" | "failed"; error?: string; version: number };
 export type ProjectInfo = { id: string; name: string; hasDraft: boolean; hasOverlay: boolean; hasRaw: boolean };
 export type RawInfo = { files: { name: string; size: number }[]; pending: { name: string; size: number; received: number }[]; note: string };

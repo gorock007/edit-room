@@ -29,6 +29,7 @@ export type Emitters = {
   overlayChanged: (p: Project) => void;
   exportChanged: (p: Project) => void;
   versionsChanged: (p: Project) => void;
+  checksChanged: (p: Project) => void;
 };
 
 /**
@@ -124,6 +125,7 @@ export function makeRoom(e: Emitters) {
     emit: e.emitComment,
     projectChanged: e.projectChanged,
     overlayChanged: e.overlayChanged,
+    checksChanged: e.checksChanged,
     starting: (p: Project) => rec(p, () => syncOutside(p)),
     finished: (p: Project, c: Comment) =>
       rec(p, () =>
@@ -330,6 +332,7 @@ export function makeRoom(e: Emitters) {
       } finally {
         quiet.delete(p.id);
         cutting.delete(p.id);
+        e.projectChanged(p); // now that the room is listening again: the checks look at the edit as cut
       }
     },
 

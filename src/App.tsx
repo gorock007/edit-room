@@ -7,7 +7,8 @@ import { Avatar, SharePanel } from "./components/People";
 import { ROLE_INFO } from "./Join";
 import { VersionsPanel } from "./components/VersionsPanel";
 import { TranscriptPanel } from "./components/TranscriptPanel";
-import type { VersionInfo } from "./types";
+import { ChecksPanel } from "./components/ChecksPanel";
+import type { Checks, Issue, VersionInfo } from "./types";
 import { clamp, cx, fmt } from "./util";
 import { Stage, type StageHandle } from "./components/Stage";
 import { Timeline } from "./components/Timeline";
@@ -70,8 +71,8 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
   const [presence, setPresence] = useState<Presence[]>([]);
   const [sharing, setSharing] = useState(false);
   const narrow = useNarrow();
-  const [tab, setTab] = useState<"comments" | "words" | "timeline" | "history">("comments");
-  const [side, setSide] = useState<"comments" | "words" | "history">("comments");
+  const [tab, setTab] = useState<"comments" | "words" | "checks" | "timeline" | "history">("comments");
+  const [side, setSide] = useState<"comments" | "words" | "checks" | "history">("comments");
   // version history, and the version being compared side by side with the current edit
   const [history, setHistory] = useState<{ versions: VersionInfo[]; current: number | null }>({ versions: [], current: null });
   const [compareVer, setCompareVer] = useState<number | null>(null);
@@ -82,6 +83,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
   const [model, setModel] = useState<EditModel | null>(null);
   const [proxy, setProxy] = useState<ProxyState | null>(null);
   const [exportSt, setExportSt] = useState<ExportState | null>(null);
+  const [checks, setChecks] = useState<Checks | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
   const [device, setDevice] = useState<Device>((store.get("room.device") as Device) || "desktop");
   const [commentMode, setCommentMode] = useState(false);
@@ -136,6 +138,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
     setModel(null);
     setProxy(null);
     setExportSt(null);
+    setChecks(null);
     setTime(0);
     setCompareId(null);
     setCompareVer(null);
@@ -145,6 +148,10 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
     api.comments(pid).then(setComments);
     api.exportState(pid).then(setExportSt).catch(() => {});
   }, [pid]);
+  // what Edit Room found in the preview; asking also starts a check if the edit changed
+  useEffect(() => {
+    if (pid && pid !== NEW && model) api.checks(pid).then(setChecks).catch(() => {});
+  }, [pid, !!model]);
   // the model needs a draft: a new edit gets one when Claude has built it
   useEffect(() => {
     if (pid && pid !== NEW && info?.hasDraft !== false) loadModel(pid);
@@ -268,6 +275,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
     }
     if (m.type === "overlay" && m.id === pid) setOverlayAt(m.at);
     if (m.type === "export" && m.id === pid) setExportSt(m.export);
+    if (m.type === "checks" && m.id === pid) setChecks(m.checks);
     if (m.type === "versions" && m.id === pid) {
       loadHistory(pid);
       setVerTick((n) => n + 1); // a compared version's picture may have finished building
@@ -438,16 +446,32 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
     seek(c.t);
     narrow ? setTab("comments") : setSide("comments");
   };
+  const openChecks = checks?.status === "ready" ? checks.issues.filter((i) => !checks.ok.includes(i.id)).length : 0;
+  const cutIssue = async (i: Issue) => {
+    if (!pid || !i.cut) return;
+    try {
+      const r = await api.cut(pid, i.cut.a, i.cut.b, i.kind === "pause" ? "a pause" : "");
+      seek(Math.max(0, r.at - 1));
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+  const askIssue = (i: Issue) => {
+    if (!i.ask) return;
+    submit({ text: i.ask, t: i.t, x: null, y: null, target: { kind: "general", label: "a check", detail: i.title.slice(0, 150) }, want: 1 });
+    narrow ? setTab("comments") : setSide("comments");
+  };
   // the Comments / History switch at the top of the side panel
   const sideHeader = (
     <div className="flex rounded-lg bg-ink-950 p-0.5 ring-1 ring-white/5">
-      {(["comments", "words", "history"] as const).map((k) => (
+      {(["comments", "words", "checks", "history"] as const).map((k) => (
         <button
           key={k}
           onClick={() => setSide(k)}
-          className={cx("rounded-md px-2.5 py-0.5 text-[12px] font-semibold capitalize transition", side === k ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-200")}
+          className={cx("rounded-md px-2 py-0.5 text-[12px] font-semibold capitalize transition", side === k ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-200")}
         >
           {k}
+          {k === "checks" && openChecks > 0 && <span className="ml-1 rounded-full bg-gold px-1 text-[10px] font-bold text-ink-950">{openChecks}</span>}
         </button>
       ))}
     </div>
@@ -738,14 +762,15 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
               </div>
               {narrow && (
                 <div className="flex shrink-0 border-t border-white/5 bg-ink-900 px-3">
-                  {(["comments", "words", "timeline", "history"] as const).map((k) => (
+                  {(["comments", "words", "checks", "timeline", "history"] as const).map((k) => (
                     <button
                       key={k}
                       onClick={() => setTab(k)}
-                      className={cx("-mb-px border-b-2 px-2.5 py-2.5 text-[13px] font-medium capitalize", tab === k ? "border-gold text-ink-100" : "border-transparent text-ink-400")}
+                      className={cx("-mb-px border-b-2 px-2 py-2.5 text-[13px] font-medium capitalize", tab === k ? "border-gold text-ink-100" : "border-transparent text-ink-400")}
                     >
                       {k}
                       {k === "comments" && comments.length > 0 && <span className="ml-1.5 text-ink-500">{comments.length}</span>}
+                      {k === "checks" && openChecks > 0 && <span className="ml-1 rounded-full bg-gold px-1 text-[10px] font-bold text-ink-950">{openChecks}</span>}
                     </button>
                   ))}
                 </div>
@@ -803,7 +828,23 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
             onError={setError}
           />
         )}
-        {(narrow ? tab === "comments" : side === "comments" || !model || (side === "words" && comparing)) && pid !== NEW && !(showNew && comments.length === 0) && (
+        {(narrow ? tab === "checks" : side === "checks") && model && pid && pid !== NEW && !comparing && (
+          <ChecksPanel
+            header={narrow ? undefined : sideHeader}
+            full={narrow}
+            checks={checks}
+            fps={model.fps}
+            canEdit={editor}
+            canAsk={commenter}
+            busy={busy > 0 || comments.some((c) => c.status === "queued")}
+            onSeek={seek}
+            onCut={cutIssue}
+            onAsk={askIssue}
+            onOk={(id, ok) => api.checkOk(pid, id, ok).then(setChecks).catch((e) => setError(e.message))}
+            onRun={() => api.runChecks(pid).then(setChecks).catch((e) => setError(e.message))}
+          />
+        )}
+        {(narrow ? tab === "comments" : side === "comments" || !model || ((side === "words" || side === "checks") && comparing)) && pid !== NEW && !(showNew && comments.length === 0) && (
         <CommentsPanel
           header={narrow || !model ? undefined : sideHeader}
           noComposer={showNew}
