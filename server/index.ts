@@ -16,7 +16,7 @@ import {
   publicPerson, redeemInvite, removePerson, updatePerson, type Person, type Role,
 } from "./people.ts";
 import { loadComments, newId, saveComments, type Comment } from "./store.ts";
-import { MAX_CHUNK, newEditFolder, putChunk, rawDir, rawInfo, saveNote, startUpload } from "./uploads.ts";
+import { FORMATS, MAX_CHUNK, libraryFolders, newEditFolder, putChunk, rawDir, rawInfo, saveBuildOptions, saveNote, startUpload, type Format } from "./uploads.ts";
 import { RoomError, authorOf, makeRoom, runsDirectly, viewOf } from "./room.ts";
 import { mcpHandler } from "./mcp.ts";
 import { versionProject } from "./versions.ts";
@@ -351,10 +351,16 @@ app.post("/api/new-edit", need("editor"), (req, res) => {
 
 app.get("/api/projects/:id/raw", withProject((p, _req, res) => res.json(rawInfo(p))));
 
+// the user's own footage folders a new edit may draw b-roll from: folder names on this Mac, so only for full editors
+app.get("/api/library-folders", need("editor"), (req, res) => {
+  if (me(req).projects !== "all") return res.json([]);
+  res.json(libraryFolders());
+});
+
 app.post("/api/projects/:id/uploads", need("editor"), withProject((p, req, res) => {
   if (p.draftDir) return res.status(400).json({ error: "this edit is already built; start a new edit for new footage" });
   try {
-    res.json(startUpload(p, String(req.body?.name ?? ""), Number(req.body?.size)));
+    res.json(startUpload(p, String(req.body?.name ?? ""), Number(req.body?.size), req.body?.dest === "resources" ? "resources" : "raw"));
   } catch (e: any) {
     res.status(400).json({ error: String(e?.message ?? e) });
   }
@@ -380,12 +386,18 @@ app.post("/api/projects/:id/build", need("editor"), withProject((p, req, res) =>
   if (loadComments(p).some((c) => c.target.kind === "build" && ["queued", "working"].includes(c.status)))
     return res.status(409).json({ error: "the first edit is already being built" });
   const note = String(req.body?.note ?? "").trim();
+  // the format is the user's call for every video, and nobody is there to ask once the build runs
+  const format = req.body?.format as Format;
+  if (!FORMATS.includes(format)) return res.status(400).json({ error: "choose 9:16 or 16:9 first" });
+  const known = new Set(libraryFolders().map((f) => f.name));
+  const folders = (Array.isArray(req.body?.folders) ? req.body.folders : []).filter((f: unknown): f is string => typeof f === "string" && known.has(f));
   saveNote(p, note);
+  saveBuildOptions(p, { format, folders });
   const c: Comment = {
     id: newId(),
     project: p.id,
     createdAt: Date.now(),
-    text: note ? `Build the first edit. ${note}` : "Build the first edit.",
+    text: `Build the first edit in ${format}.${raw.resources.length ? ` ${raw.resources.length} extra file${raw.resources.length > 1 ? "s" : ""} to use.` : ""}${note ? ` ${note}` : ""}`,
     t: 0,
     x: null,
     y: null,

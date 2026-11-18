@@ -57,6 +57,13 @@ npm run dev        # server on :4310 + app on http://127.0.0.1:5310 (also keeps 
   optional note ("starts at …"), and Claude builds the first edit with the talking-head-reel-edit skill. The file goes
   to `<MMDD> edit/raw/` (today's date; `<MMDD>b` if that name is taken here or in CapCut) in 16 MB pieces, so a
   dropped connection or a reload resumes: pick the same file again. The phone's screen stays on while it uploads.
+  - **Extra material for this video**: b-roll, screen recordings and screenshots go to `<MMDD> edit/resources/`. The
+    build catalogues them and must put each one on screen or say why not.
+  - **Format**: 9:16 or 16:9, chosen before the build starts (it remembers the last choice). The build is refused
+    without one, because nobody is there to ask once it runs.
+  - **Also draw b-roll from**: your own footage folders inside the video folder ("Brolls shots", a shoot's folder).
+  - The build runs unattended: it reviews its own cut, writes `edit-data/edit_plan.json` (what goes on screen for
+    each line, and why) and works the checks until they pass before handing over.
 - **Export** (header): one upload-ready MP4 for Instagram Reels and TikTok, made straight from the CapCut draft (no
   CapCut export needed): 1080×1920 (or 1920×1080), 30 fps, H.264 High, AAC 320k, loudness −14 LUFS with true peak under
   −1 dBTP. It checks the file it wrote (frame count, format, loudness), offers it as a download (on the phone too) and

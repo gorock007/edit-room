@@ -24,7 +24,13 @@ export type Checks = {
 };
 export type ProxyState = { status: "missing" | "ready" | "stale" | "building" | "failed"; error?: string; version: number };
 export type ProjectInfo = { id: string; name: string; hasDraft: boolean; hasOverlay: boolean; hasRaw: boolean };
-export type RawInfo = { files: { name: string; size: number }[]; pending: { name: string; size: number; received: number }[]; note: string };
+export type Dest = "raw" | "resources";
+export type Format = "9:16" | "16:9";
+export type RawInfo = {
+  files: { name: string; size: number }[]; pending: { name: string; size: number; received: number; dest?: Dest }[]; note: string;
+  resources: { name: string; size: number }[]; format: Format | null; folders: string[];
+};
+export type LibraryFolder = { name: string; files: number };
 export type Target = { kind: "caption" | "frame" | "sfx" | "cut" | "broll" | "general" | "build"; id?: string; label: string; detail?: string };
 export type Activity = { at: number; kind: "tool" | "text" | "info" | "error"; text: string };
 

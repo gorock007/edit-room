@@ -1,4 +1,5 @@
 import { api, LOGIN_EVENT } from "./api";
+import type { Dest } from "./types";
 
 /** 16 MB pieces: small enough to resend cheaply on a phone connection, big enough to keep the line busy. */
 const CHUNK = 16 * 1024 * 1024;
@@ -38,8 +39,8 @@ const sleep = (ms: number, signal: AbortSignal) =>
  * Send one file in chunks. Resumes from whatever the server already has (also after a page reload, when the same
  * file is picked again), and keeps retrying through dropped connections with a growing pause.
  */
-export async function uploadFile(projectId: string, file: File, onProgress: (sent: number) => void, signal: AbortSignal): Promise<string> {
-  const st = await api.startUpload(projectId, file.name, file.size);
+export async function uploadFile(projectId: string, file: File, onProgress: (sent: number) => void, signal: AbortSignal, dest: Dest = "raw"): Promise<string> {
+  const st = await api.startUpload(projectId, file.name, file.size, dest);
   if (st.done) {
     onProgress(file.size);
     return st.name;
@@ -65,7 +66,7 @@ export async function uploadFile(projectId: string, file: File, onProgress: (sen
       if (err.received != null) offset = err.received;
       else
         try {
-          offset = (await api.startUpload(projectId, file.name, file.size)).received;
+          offset = (await api.startUpload(projectId, file.name, file.size, dest)).received;
         } catch {}
       onProgress(offset);
     }

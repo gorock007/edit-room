@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Checks, Comment, EditModel, ExportState, Invite, McpUrls, Person, PersonFull, Presence, ProjectInfo, ProxyState, RawInfo, Role, Target, Tier, Transcript, Usage, VersionInfo, Pick } from "./types";
+import type { Checks, Comment, EditModel, ExportState, Invite, McpUrls, Person, PersonFull, Presence, ProjectInfo, ProxyState, RawInfo, Dest, Format, LibraryFolder, Role, Target, Tier, Transcript, Usage, VersionInfo, Pick } from "./types";
 
 /** Fired when the server says this device's session is gone; the app swaps to the login screen. */
 export const LOGIN_EVENT = "room:login";
@@ -51,9 +51,10 @@ export const api = {
   pick: (id: string, cid: string, key: string) => postJson(`/api/projects/${id}/comments/${cid}/pick`, { key }).then(j<Comment>),
   newEdit: () => fetch("/api/new-edit", { method: "POST" }).then(j<{ id: string }>),
   raw: (id: string) => fetch(`/api/projects/${id}/raw`).then(j<RawInfo>),
-  startUpload: (id: string, name: string, size: number) =>
-    postJson(`/api/projects/${id}/uploads`, { name, size }).then(j<{ key: string; name: string; size: number; received: number; done: boolean }>),
-  build: (id: string, note: string) => postJson(`/api/projects/${id}/build`, { note }).then(j<Comment>),
+  startUpload: (id: string, name: string, size: number, dest: Dest = "raw") =>
+    postJson(`/api/projects/${id}/uploads`, { name, size, dest }).then(j<{ key: string; name: string; size: number; received: number; done: boolean }>),
+  build: (id: string, note: string, format: Format, folders: string[]) => postJson(`/api/projects/${id}/build`, { note, format, folders }).then(j<Comment>),
+  libraryFolders: () => fetch("/api/library-folders").then(j<LibraryFolder[]>),
   exportState: (id: string) => fetch(`/api/projects/${id}/export`).then(j<ExportState>),
   startExport: (id: string) => fetch(`/api/projects/${id}/export`, { method: "POST" }).then(j<ExportState>),
   fileUrl: (id: string, path: string) => `/media/${id}/file?p=${encodeURIComponent(path)}`,

@@ -10,15 +10,24 @@ import type { Project } from "./projects.ts";
 /**
  * Raw footage for a new edit, sent from any device (the phone over Tailscale) in chunks, so a dropped connection or a
  * locked screen resumes where it stopped instead of starting a 5 GB file again. The file lands in "<NNNN> edit/raw/".
+ * Extra material for the same video (b-roll, screen recordings, screenshots) goes the same way into
+ * "<NNNN> edit/resources/": the edit skill catalogues that folder and must use each file or say why not.
  */
 
 export const VIDEO_EXT = /\.(mp4|mov|m4v|mts|m2ts|mxf|avi|mkv|wav|m4a|mp3|aif|aiff)$/i;
+export const IMAGE_EXT = /\.(png|jpe?g|heic|heif|webp|gif|tiff?)$/i;
+export type Dest = "raw" | "resources";
+export const FORMATS = ["9:16", "16:9"] as const;
+export type Format = (typeof FORMATS)[number];
 export const MAX_FILE = 200 * 1024 ** 3;
 export const MAX_CHUNK = 64 * 1024 ** 2;
 const SPARE = 5 * 1024 ** 3; // never fill the disk: keep this much free after the upload
 
 export const rawDir = (p: Project) => path.join(p.editDir, "raw");
+export const resourcesDir = (p: Project) => path.join(p.editDir, "resources");
+const destDir = (p: Project, dest: Dest) => (dest === "resources" ? resourcesDir(p) : rawDir(p));
 const partsDir = (p: Project) => path.join(rawDir(p), ".uploads");
+const okFor = (name: string, dest: Dest) => VIDEO_EXT.test(name) || (dest === "resources" && IMAGE_EXT.test(name));
 
 /**
  * The next free "<MMDD> edit" folder (today's date, like the user's earlier edits); a second one today is "<MMDD>b".
@@ -40,14 +49,16 @@ export function newEditFolder(now = new Date()): { id: string; dir: string } {
   throw new Error("too many edits today");
 }
 
-export function cleanName(name: string): string | null {
+export function cleanName(name: string, dest: Dest = "raw"): string | null {
   const n = path.basename(String(name)).replace(/[\u0000-\u001f/\\:]/g, "").trim();
-  if (!n || n.startsWith(".") || n.length > 180 || !VIDEO_EXT.test(n)) return null;
+  if (!n || n.startsWith(".") || n.length > 180 || !okFor(n, dest)) return null;
   return n;
 }
 
-type Meta = { name: string; size: number };
-const keyOf = (name: string, size: number) => crypto.createHash("sha1").update(`${name}\0${size}`).digest("hex").slice(0, 16);
+type Meta = { name: string; size: number; dest?: Dest };
+// the raw key stays as it was, so an upload begun before this change still resumes
+const keyOf = (name: string, size: number, dest: Dest) =>
+  crypto.createHash("sha1").update(dest === "raw" ? `${name}\0${size}` : `${dest}\0${name}\0${size}`).digest("hex").slice(0, 16);
 const partFile = (p: Project, key: string) => path.join(partsDir(p), `${key}.part`);
 const metaFile = (p: Project, key: string) => path.join(partsDir(p), `${key}.json`);
 const size = (f: string) => (fs.existsSync(f) ? fs.statSync(f).size : 0);
@@ -55,18 +66,18 @@ const size = (f: string) => (fs.existsSync(f) ? fs.statSync(f).size : 0);
 export type UploadState = { key: string; name: string; size: number; received: number; done: boolean };
 
 /** Start (or resume) an upload. Picking the same file again resumes from what the server already has. */
-export function startUpload(p: Project, rawName: string, total: number): UploadState {
-  const name = cleanName(rawName);
-  if (!name) throw new Error("only video or audio files can be uploaded");
+export function startUpload(p: Project, rawName: string, total: number, dest: Dest = "raw"): UploadState {
+  const name = cleanName(rawName, dest);
+  if (!name) throw new Error(dest === "resources" ? "only video, audio or image files can be added" : "only video or audio files can be uploaded");
   if (!Number.isFinite(total) || total <= 0 || total > MAX_FILE) throw new Error("file size is missing or too big");
-  const key = keyOf(name, total);
-  const done = path.join(rawDir(p), name);
+  const key = keyOf(name, total, dest);
+  const done = path.join(destDir(p, dest), name);
   if (size(done) === total) return { key, name, size: total, received: total, done: true };
   fs.mkdirSync(partsDir(p), { recursive: true });
   const received = size(partFile(p, key));
   const { bavail, bsize } = fs.statfsSync(partsDir(p));
   if (bavail * bsize - (total - received) < SPARE) throw new Error("not enough free space on the Mac for this file");
-  fs.writeFileSync(metaFile(p, key), JSON.stringify({ name, size: total } satisfies Meta));
+  fs.writeFileSync(metaFile(p, key), JSON.stringify({ name, size: total, dest } satisfies Meta));
   return { key, name, size: total, received, done: false };
 }
 
@@ -99,8 +110,10 @@ export async function putChunk(p: Project, key: string, offset: number, req: htt
     }
     const received = size(part);
     if (received < meta.size) return { key, name: meta.name, size: meta.size, received, done: false };
-    let dest = path.join(rawDir(p), meta.name);
-    for (let i = 2; fs.existsSync(dest); i++) dest = path.join(rawDir(p), meta.name.replace(/(\.[^.]+)$/, ` (${i})$1`));
+    const dir = destDir(p, meta.dest === "resources" ? "resources" : "raw");
+    fs.mkdirSync(dir, { recursive: true });
+    let dest = path.join(dir, meta.name);
+    for (let i = 2; fs.existsSync(dest); i++) dest = path.join(dir, meta.name.replace(/(\.[^.]+)$/, ` (${i})$1`));
     fs.renameSync(part, dest);
     fs.rmSync(metaFile(p, key), { force: true });
     try {
@@ -112,15 +125,66 @@ export async function putChunk(p: Project, key: string, offset: number, req: htt
   }
 }
 
-export type RawInfo = { files: { name: string; size: number }[]; pending: { name: string; size: number; received: number }[]; note: string };
+type FileRow = { name: string; size: number };
+type PendingRow = FileRow & { received: number; dest?: Dest };
+/** What the build was asked for besides the footage: the format the user picked and library folders to draw from. */
+export type BuildOptions = { format: Format | null; folders: string[] };
+export type RawInfo = { files: FileRow[]; pending: PendingRow[]; note: string; resources: FileRow[] } & BuildOptions;
+
+const list = (dir: string, dest: Dest): FileRow[] =>
+  fs.existsSync(dir)
+    ? fs.readdirSync(dir).filter((n) => okFor(n, dest) && !n.startsWith(".")).map((name) => ({ name, size: size(path.join(dir, name)) }))
+    : [];
+
+const optionsFile = (p: Project) => path.join(rawDir(p), "build.json");
+export function buildOptions(p: Project): BuildOptions {
+  try {
+    const o = JSON.parse(fs.readFileSync(optionsFile(p), "utf8"));
+    return { format: FORMATS.includes(o.format) ? o.format : null, folders: Array.isArray(o.folders) ? o.folders.filter((x: unknown) => typeof x === "string") : [] };
+  } catch {
+    return { format: null, folders: [] };
+  }
+}
+export function saveBuildOptions(p: Project, o: BuildOptions) {
+  fs.mkdirSync(rawDir(p), { recursive: true });
+  fs.writeFileSync(optionsFile(p), JSON.stringify(o, null, 1) + "\n");
+}
+
+const SKIP_DIRS = /^(\d{4}\w? edit|SFX Sounds|background music|editing-toolkit|graphic-type|references|reports|research_notes|capcut assets)$/i;
+/**
+ * Folders of the user's own footage inside the video folder that an edit may draw b-roll from ("Brolls shots", a
+ * shoot's folder): any top-level folder that is not an edit or a tools folder and holds video or pictures.
+ */
+export function libraryFolders(): { name: string; files: number }[] {
+  const out: { name: string; files: number }[] = [];
+  let top: fs.Dirent[] = [];
+  try {
+    top = fs.readdirSync(VIDEO_ROOT, { withFileTypes: true });
+  } catch {}
+  const count = (dir: string, depth: number): number => {
+    let n = 0;
+    try {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (e.name.startsWith(".")) continue;
+        if (e.isDirectory()) n += depth > 0 ? count(path.join(dir, e.name), depth - 1) : 0;
+        else if (/\.(mp4|mov|m4v|mts|m2ts|mxf|avi|mkv)$/i.test(e.name) || IMAGE_EXT.test(e.name)) n++;
+      }
+    } catch {}
+    return n;
+  };
+  for (const e of top) {
+    if (!e.isDirectory() || e.name.startsWith(".") || SKIP_DIRS.test(e.name)) continue;
+    const files = count(path.join(VIDEO_ROOT, e.name), 1);
+    if (files) out.push({ name: e.name, files });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
 
 export function rawInfo(p: Project): RawInfo {
   const dir = rawDir(p);
-  if (!fs.existsSync(dir)) return { files: [], pending: [], note: "" };
-  const files = fs
-    .readdirSync(dir)
-    .filter((n) => VIDEO_EXT.test(n) && !n.startsWith("."))
-    .map((name) => ({ name, size: size(path.join(dir, name)) }));
+  const resources = list(resourcesDir(p), "resources");
+  if (!fs.existsSync(dir)) return { files: [], pending: [], note: "", resources, ...buildOptions(p) };
+  const files = list(dir, "raw");
   const pending = fs.existsSync(partsDir(p))
     ? fs
         .readdirSync(partsDir(p))
@@ -128,7 +192,7 @@ export function rawInfo(p: Project): RawInfo {
         .flatMap((n) => {
           try {
             const m: Meta = JSON.parse(fs.readFileSync(path.join(partsDir(p), n), "utf8"));
-            return [{ ...m, received: size(partFile(p, n.replace(/\.json$/, ""))) }];
+            return [{ name: m.name, size: m.size, dest: m.dest ?? "raw", received: size(partFile(p, n.replace(/\.json$/, ""))) }];
           } catch {
             return [];
           }
@@ -138,7 +202,7 @@ export function rawInfo(p: Project): RawInfo {
   try {
     note = fs.readFileSync(path.join(dir, "brief.md"), "utf8");
   } catch {}
-  return { files, pending, note };
+  return { files, pending, note, resources, ...buildOptions(p) };
 }
 
 export function saveNote(p: Project, note: string) {

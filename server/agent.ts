@@ -10,7 +10,7 @@ import { changedSince, loadComments, restore, saveComments, snapshot, updateComm
 import { KEYS, optionProject, saveOption, saveOptionFrom } from "./options.ts";
 import { bringHome, dropWorkspace, makeWorkspaces, type Workspace } from "./workspace.ts";
 import { ALL, coveredBy } from "../src/safezones.ts";
-import { rawDir, rawInfo } from "./uploads.ts";
+import { rawDir, rawInfo, resourcesDir } from "./uploads.ts";
 import { routeFor } from "./router.ts";
 import { noteRateLimit, readUsage } from "./usage.ts";
 import { checksState, checksText, scheduleChecks } from "./checks.ts";
@@ -104,34 +104,50 @@ function describeTarget(c: Comment, p: Project) {
   return ctx;
 }
 
-/** The first edit of a new project: raw footage only, no CapCut draft yet. */
-function firstEditPrompt(c: Comment, p: Project) {
+/** The first edit of a new project: raw footage and whatever came with it, no CapCut draft yet. */
+export function firstEditPrompt(c: Comment, p: Project) {
   const raw = rawInfo(p);
-  const gb = (n: number) => (n / 1024 ** 3).toFixed(2) + " GB";
-  return `The user uploaded raw footage for a NEW edit from Edit Room and asked you to build the first edit.
+  const gb = (n: number) => (n >= 1024 ** 3 ? (n / 1024 ** 3).toFixed(2) + " GB" : Math.max(0.1, n / 1024 ** 2).toFixed(1) + " MB");
+  const tall = raw.format !== "16:9";
+  const folders = raw.folders.map((f) => path.join(VIDEO_ROOT, f));
+  return `The user uploaded raw footage for a NEW edit from Edit Room and pressed the button. They expect to come back to a
+finished edit without being asked anything in between.
 
 Footage (in ${rawDir(p)}):
 ${raw.files.map((f) => `- ${f.name} (${gb(f.size)})`).join("\n")}
 
+Format: ${raw.format ?? "9:16"} (the user chose it; deliver only this format).
+
+Extra material the user gave for THIS video (in ${resourcesDir(p)}):
+${raw.resources.length ? raw.resources.map((f) => `- ${f.name} (${gb(f.size)})`).join("\n") : "(none)"}
+${raw.resources.length ? "They picked these for this video: each one goes on screen where it fits the line, or your plan says why not.\n" : ""}
+Their own footage folders to draw b-roll from: ${folders.length ? folders.map((f) => `"${f}"`).join(", ") : "(none named: use b-roll only if the note asks for it)"}
+
 The user's note: ${raw.note.trim() ? `"${raw.note.trim()}"` : "(none: find the first script line and the end yourself, and drop off-script chatter)"}
 
-Build it end to end with the talking-head-reel-edit skill, in the house style, exactly as you would in a chat with
-the user, with these differences:
-- Nobody is at a prompt. Do not stop to ask; make the call the skill and the user's memory point to, and say in your
-  final reply what you decided (takes chosen, anything you were unsure of).
+Build it end to end with the talking-head-reel-edit skill, in the house style, as an unattended build (the skill's
+"Unattended builds" paragraph), with these specifics:
+- Nobody is at a prompt. Do not stop to ask; make the call the skill, its references/lessons.md and the user's memory
+  point to.
 - The edit folder is ${p.editDir} (already made, with the footage in raw/). Keep deliverables there as the skill says.
-- There is no CapCut draft yet. Create one named "${p.id}" in the CapCut drafts folder (\`capcut init "${p.id}"\`,
-  --ratio 9:16 if the footage is vertical), then continue from step 0. Write edit-data/build_cfg.json as the skill
-  says: the app finds the draft through its main_src.
+- There is no CapCut draft yet. Create one named "${p.id}" in the CapCut drafts folder (\`capcut init "${p.id}"${tall ? " --ratio 9:16" : ""}\`),
+  then continue from step 0. Write edit-data/build_cfg.json as the skill says: the app finds the draft through its main_src.
+- The cut: run cut_review.py after verify_cut.py and work it until it exits 0 (skill §2). Most of the user's comments
+  on earlier first edits were about pauses, breaths, stray words and clipped words.
+- What goes on screen: run catalog_resources.py on the edit folder${folders.length ? " and the footage folders above" : ""}, look at the sheets, write
+  edit-data/edit_plan.json and get check_plan.py to exit 0 before drawing anything (skill §4, references/devices.md).
 - If the footage is not one talking-head recording (several clips, b-roll only, audio only), build the most sensible
   edit you can and explain it.
-- Post a short progress note with room_note at the start of each big step (takes found, cut verified, grade, cards,
-  draft built, preview), so the user can follow along on their phone.
-- Do not run the 9:16 version or the 4K master; the user asks for those separately.
+- Post a short progress note with room_note at the start of each big step (takes found, cut reviewed, plan written,
+  grade, graphics, draft built, preview), so the user can follow along on their phone. The plan note says the video
+  type and how many of each device.
+- Do not make a second format or the 4K master; the user asks for those separately.
 - When the draft is built, call room_refresh_picture so the app's preview is ready, then room_check. Fix what it finds
-  (a pause, captions off the voice, a clipped or repeated word, a colour jump), refresh and check once more; anything
-  you leave, name in your final reply with why it is fine.
-Final reply: 2-4 short sentences: what you built, the length, and anything the user should look at first.`;
+  (a pause, captions off the voice, a clipped or repeated word, a colour jump), refresh and check once more. Then go
+  through references/lessons.md "Before handing over" and fix what fails. Anything you leave, name in your final
+  reply with why it is fine.
+Final reply: 3-5 short sentences: what you built and its length, the video type and devices you chose, any given file
+you did not use and why, and the one or two things the user should look at first.`;
 }
 
 function buildPrompt(c: Comment, p: Project, framePath: string | null) {
