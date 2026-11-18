@@ -4,7 +4,7 @@ import http from "node:http";
 import express from "express";
 import { WebSocketServer, WebSocket } from "ws";
 import chokidar, { type FSWatcher } from "chokidar";
-import { ALLOWED_HOSTS, ALLOWED_ORIGINS, HOST, PORT, PUBLIC_HOSTS, READ_ROOTS, REMOTE_PORT, inside } from "./config.ts";
+import { ALLOWED_HOSTS, ALLOWED_ORIGINS, HOST, PORT, PUBLIC_HOSTS, READ_ROOTS, REMOTE_PORT, VIDEO_ROOT, inside } from "./config.ts";
 import { getProject, listProjects, readModel, type Project } from "./projects.ts";
 import { buildProxy, proxyFile, proxyState } from "./proxy.ts";
 import { exportFile, exportName, exportState } from "./exporter.ts";
@@ -588,6 +588,16 @@ app.get("/{*any}", (_req, res) => {
   const index = path.join(dist, "index.html");
   fs.existsSync(index) ? res.set("Cache-Control", "no-cache").sendFile(index) : res.status(404).send("Not built yet: run npm run build");
 });
+
+// macOS refuses a terminal the iCloud Drive folder until it is allowed: say how, instead of a stack trace
+try {
+  fs.readdirSync(VIDEO_ROOT);
+} catch (e) {
+  if ((e as NodeJS.ErrnoException).code === "EPERM") {
+    console.error(`\nEdit Room can't read ${VIDEO_ROOT}: macOS is blocking this terminal app.\nOpen System Settings > Privacy & Security > Files & Folders, find this terminal app and turn on iCloud Drive\n(or add it under Full Disk Access), quit and reopen the terminal, then run npm run dev again.\n`);
+    process.exit(1);
+  }
+}
 
 const cutOff = recoverInterrupted(listProjects());
 if (cutOff) console.log(`marked ${cutOff} comment(s) stopped: they were cut off when the server last closed`);
