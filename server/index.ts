@@ -22,7 +22,7 @@ import { mcpHandler } from "./mcp.ts";
 import { versionProject } from "./versions.ts";
 import { readUsage } from "./usage.ts";
 import { checksState, scheduleChecks, setOk } from "./checks.ts";
-import { DRIVER, stillSeek } from "./overlay.ts";
+import { DRIVER, OVERLAY_CSP, stillSeek } from "./overlay.ts";
 
 const app = express();
 app.set("case sensitive routing", true); // "/API/..." must not reach a route the login gate didn't recognise
@@ -576,6 +576,7 @@ app.get("/overlay/:id/{*rest}", withProject((p, req, res) => {
   const f = path.resolve(dir, rest);
   // an option's folder links to the real one for everything it did not change, so both are allowed roots
   if (!inside(f, [dir, p.overlaysDir ?? dir]) || !fs.existsSync(f)) return res.status(404).end();
+  res.set("Content-Security-Policy", OVERLAY_CSP); // the composition's files may not call the API (overlay.ts)
   if (rest === "index.html") {
     let html = fs.readFileSync(f, "utf8").replace("<head>", "<head>" + DRIVER);
     // ?still=<seconds>: seek once loaded, for a still of the captions (overlay.ts, headless Chrome)
