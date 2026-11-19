@@ -11,7 +11,7 @@ import { KEYS, applyOption, hasOption } from "./options.ts";
 import { OWNER, can, type Person } from "./people.ts";
 import { changedSince, loadComments, newId, restore, saveComments, snapshot, updateComment, type Author, type Comment, type Target, type Tier } from "./store.ts";
 import { TIER_NAMES } from "./router.ts";
-import { ShotError, applySwap, listShots, logSwap, renderMontage, type SwapReq } from "./shots.ts";
+import { ShotError, applySwap, listShots, logSwap, renderMontage, shotMode, swapBroll, type SwapReq } from "./shots.ts";
 import { info, nameVersion, record, restoreFiles, same, syncOutside, versions, type Version } from "./versions.ts";
 
 /**
@@ -360,30 +360,37 @@ export function makeRoom(e: Emitters) {
       try {
         outside(p);
         snapshot(p, cid);
+        const broll = shotMode(p) === "broll";
         let r;
         try {
-          r = applySwap(p, i, b);
-          await renderMontage(p);
+          if (broll) r = await swapBroll(p, i, b);
+          else {
+            r = applySwap(p, i, b);
+            await renderMontage(p);
+          }
         } catch (err: any) {
           restore(p, cid, changedSince(p, cid));
-          await renderMontage(p).catch(() => {});
+          if (!broll) await renderMontage(p).catch(() => {});
           throw err instanceof ShotError ? new RoomError(err.status, err.message) : err;
         }
         const changed = changedSince(p, cid);
-        const shot = listShots(p).shots[i];
+        const shot = listShots(p).shots.find((s) => s.i === i);
+        const n = shot?.n ?? i + 1;
         const name = path.basename(r.after.file);
         const c: Comment = {
           id: cid,
           project: p.id,
           createdAt: Date.now(),
-          text: `Swapped shot ${i + 1} for ${name} at ${r.after.src.toFixed(1)} s`,
+          text: broll ? `Swapped b-roll ${n} for ${name} at ${r.after.src.toFixed(1)} s` : `Swapped shot ${n} for ${name} at ${r.after.src.toFixed(1)} s`,
           t: shot?.start ?? 0,
           x: null,
           y: null,
-          target: { kind: "broll", label: `shot ${i + 1} (${r.part})`, detail: `${r.dur.toFixed(2)} s` },
+          target: { kind: "broll", label: broll ? `b-roll ${n}` : `shot ${n} (${r.part})`, detail: `${r.dur.toFixed(2)} s` },
           status: "done",
           activity: [{ at: Date.now(), kind: "info", text: `${who.name} swapped it directly (was ${r.before.file ? path.basename(r.before.file) : "?"} at ${r.before.src ?? "?"} s)` }],
-          reply: `Shot ${i + 1} is now ${name} from ${r.after.src.toFixed(2)} s. Only that shot was re-rendered; the beat timing is unchanged.`,
+          reply: broll
+            ? `B-roll ${n} is now ${name} from ${r.after.src.toFixed(2)} s, graded like the rest of the edit. It keeps its place and length, so nothing else moved.`
+            : `Shot ${n} is now ${name} from ${r.after.src.toFixed(2)} s. Only that shot was re-rendered; the beat timing is unchanged.`,
           changed,
           finishedAt: Date.now(),
           want: 1,
@@ -393,7 +400,7 @@ export function makeRoom(e: Emitters) {
         saveComments(p, [...loadComments(p), c]);
         rec(p, () => record(p, { kind: "comment", what: c.text, by: c.author, comment: cid }));
         try {
-          logSwap(p, { shot: i + 1, part: r.part, before: r.before, after: r.after, by: who.name });
+          logSwap(p, { shot: n, part: r.part, before: r.before, after: r.after, by: who.name });
         } catch {}
         buildProxy(p, () => e.projectChanged(p));
         e.emitComment(c);

@@ -23,7 +23,7 @@ import { versionProject } from "./versions.ts";
 import { readUsage } from "./usage.ts";
 import { checksState, scheduleChecks, setOk } from "./checks.ts";
 import { MUSIC_DIR, listMusic, musicFile } from "./music.ts";
-import { ShotError, clipFrame, clipPreview, clipsFor, hasShots, listShots, previewFile, shotThumb, suggestions } from "./shots.ts";
+import { BROLL_CROP_H, ShotError, clipFrame, clipPreview, clipsFor, hasShots, listShots, previewFile, shotThumb, suggestions } from "./shots.ts";
 import { autoTemplates, templateKit, WILD_ROOT, WildError, folderOf, listTemplates, templateOf, listWild, recoverWildJobs, setDecision, startPlan, startTemplate, stopWildJob, wildDetail, wildFile, type Decision } from "./wildcards.ts";
 import { DRIVER, GSAP_CDN_SRC, LOCAL_GSAP, OVERLAY_CSP, localGsapUrl, stillSeek } from "./overlay.ts";
 
@@ -439,7 +439,7 @@ app.get("/api/projects/:id/model", withProject((p, _req, res) => {
   res.json({ model: readModel(p), proxy: proxyState(p) });
 }));
 
-// ---- shots: swap a montage edit's shots like a CapCut template (server/shots.ts) ----
+// ---- shots: swap b-roll / a montage edit's shots like a CapCut template (server/shots.ts) ----
 const shotOk = (req: express.Request) => runsDirectly(me(req)); // clip lists name the footage folders on this Mac
 const shotN = (req: express.Request) => {
   const n = Number(req.params.i);
@@ -448,7 +448,7 @@ const shotN = (req: express.Request) => {
 };
 const shotErr = (res: express.Response, e: any) => res.status(e instanceof ShotError || e instanceof RoomError ? e.status : 500).json({ error: String(e?.message ?? e) });
 app.get("/api/projects/:id/shots", need("editor"), withProject((p, req, res) => {
-  if (!hasShots(p)) return res.json({ shots: [], story: null, style: null, total: 0 });
+  if (!hasShots(p)) return res.json({ mode: null, shots: [], story: null, style: null, total: 0 });
   const l = listShots(p);
   // folder paths on this Mac only for people with every project (like the clip browser); others get file names
   if (!shotOk(req)) l.shots = l.shots.map((s) => ({ ...s, file: s.name }));
@@ -462,9 +462,11 @@ app.get("/media/:id/shot/:i", need("editor"), withProject((p, req, res) => {
 app.get("/api/projects/:id/shots/:i/clips", need("editor"), withProject(async (p, req, res) => {
   if (!shotOk(req)) return res.status(403).json({ error: "Only people with access to every project can browse the footage folders." });
   try {
-    const s = listShots(p).shots[shotN(req)];
+    const l = listShots(p);
+    const n = shotN(req);
+    const s = l.shots.find((x) => x.i === n);
     if (!s?.needs) return res.status(400).json({ error: "That shot can't be swapped." });
-    res.json({ shot: s, clips: clipsFor(p, s.needs), suggestions: await suggestions(p, s.i) });
+    res.json({ shot: s, clips: clipsFor(p, s.needs, l.mode === "broll" ? BROLL_CROP_H : 2000), suggestions: await suggestions(p, s.i) });
   } catch (e) {
     shotErr(res, e);
   }

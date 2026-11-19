@@ -181,7 +181,7 @@ export function saveBuildOptions(p: Project, o: BuildOptions) {
   fs.writeFileSync(optionsFile(p), JSON.stringify(o, null, 1) + "\n");
 }
 
-const SKIP_DIRS = /^(\d{4}\w? edit|SFX Sounds|background music|editing-toolkit|graphic-type|references|reports|research_notes|capcut assets|wild cards|templates)$/i;
+const SKIP_DIRS = /^(\d{4}\w? .+|SFX Sounds|background music|editing-toolkit|graphic-type|references|reports|research_notes|capcut assets|wild cards|templates)$/i;
 /**
  * Folders of the user's own footage inside the video folder that an edit may draw b-roll from ("Brolls shots", a
  * shoot's folder): any top-level folder that is not an edit or a tools folder and holds video or pictures.

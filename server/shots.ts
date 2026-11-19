@@ -1,5 +1,6 @@
 /**
- * Shots: montage edits (wild card templates such as "Usage limit reached") are a list of shots on the music's beat
+ * Shots: house-style edits' footage b-roll (the draft's B-roll track) and montage edits' shot lists can be swapped
+ * like a CapCut template's slots. Montage edits: (wild card templates such as "Usage limit reached") are a list of shots on the music's beat
  * grid (edit-data/montage.json). Like a CapCut template, any shot can be swapped for another clip, keeping its length:
  * pick a clip from the footage folders (or the phone), pick which part of it, save. Only that shot is re-rendered
  * (the skill's montage_render.py), so the beat timing never moves. Swaps are logged next to the template so later
@@ -10,7 +11,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DATA_DIR, SKILL_DIR, VIDEO_ROOT, inside } from "./config.ts";
-import type { Project } from "./projects.ts";
+import { readModel, type Project } from "./projects.ts";
 import { libraryFolders } from "./uploads.ts";
 import { TEMPLATES_DIR, templateStory } from "./wildcards.ts";
 
@@ -21,6 +22,8 @@ const PY = "python3";
 const RENDER = path.join(SKILL_DIR, "scripts/montage_render.py");
 const PICK = path.join(SKILL_DIR, "scripts/broll_index.py");
 const CACHE = path.join(DATA_DIR, "library");
+const GRADE = path.join(SKILL_DIR, "scripts/prep_broll.py");
+const US = 1_000_000;
 
 export class ShotError extends Error {
   constructor(public status: number, msg: string) {
@@ -30,7 +33,12 @@ export class ShotError extends Error {
 
 type Clip = { part: string; file: string | null; src?: number; frames: number; fit?: string; cx?: number; cy?: number; zoom?: number; h?: number; ay?: number; shows?: string; why?: string };
 export type Shot = {
+  /** montage: index in montage.json; b-roll: index on the draft's B-roll track */
   i: number;
+  /** 1-based number shown to the user */
+  n: number;
+  /** tall = a full 9:16 frame, strip = the wide band of a montage, wide = a full 16:9 frame */
+  frame: "tall" | "strip" | "wide" | null;
   part: string;
   file: string | null;
   name: string | null;
@@ -53,7 +61,16 @@ const readJson = <T,>(f: string): T | null => {
     return null;
   }
 };
-export const hasShots = (p: Project) => fs.existsSync(montageFile(p));
+export type ShotMode = "montage" | "broll";
+export function shotMode(p: Project): ShotMode | null {
+  if (fs.existsSync(montageFile(p))) return "montage";
+  try {
+    return brollSegs(p).segs.length ? "broll" : null;
+  } catch {
+    return null;
+  }
+}
+export const hasShots = (p: Project) => shotMode(p) !== null;
 const plan = (p: Project) => {
   const m = readJson<{ clips: Clip[]; music?: string }>(montageFile(p));
   if (!m || !Array.isArray(m.clips)) throw new ShotError(404, "This edit has no shot list.");
@@ -76,7 +93,9 @@ function relOf(f: string | null): string | null {
   return hits.length === 1 ? hits[0] : f;
 }
 
-export function listShots(p: Project): { shots: Shot[]; story: ReturnType<typeof templateStory>; style: string | null; total: number } {
+export type ShotList = { mode: ShotMode; shots: Shot[]; story: ReturnType<typeof templateStory>; style: string | null; total: number };
+export function listShots(p: Project): ShotList {
+  if (shotMode(p) === "broll") return brollList(p);
   const m = plan(p);
   const man = manifest(p);
   let start = 0;
@@ -84,6 +103,8 @@ export function listShots(p: Project): { shots: Shot[]; story: ReturnType<typeof
     const frames = Math.max(1, Math.round(Number(c.frames) || 1));
     const s: Shot = {
       i,
+      n: i + 1,
+      frame: c.file === null ? null : c.fit === "fill" ? "tall" : "strip",
       part: String(c.part ?? "shot"),
       file: relOf(c.file),
       name: c.file ? path.basename(c.file) : null,
@@ -101,11 +122,12 @@ export function listShots(p: Project): { shots: Shot[]; story: ReturnType<typeof
     return s;
   });
   const style = styleOf(p);
-  return { shots, story: templateStory(style), style, total: start / FPS };
+  return { mode: "montage", shots, story: templateStory(style), style, total: start / FPS };
 }
 
 /** A shot's thumbnail, from the rendered montage (exactly as it looks in the edit), cached by its render signature. */
 export function shotThumb(p: Project, i: number): string | null {
+  if (shotMode(p) === "broll") return brollThumb(p, i);
   const m = mainSrc(p);
   const tl = readJson<{ src: number; dur: number }[]>(path.join(p.editDir, "edit-data", "timeline.json"));
   if (!m || !tl?.[i] || !fs.existsSync(m)) return null;
@@ -145,14 +167,14 @@ function probe(abs: string): Probe {
 }
 
 /** Clips of the shape a shot needs: the footage folders' index plus anything uploaded to this edit. */
-export function clipsFor(p: Project, needs: "portrait" | "landscape") {
+export function clipsFor(p: Project, needs: "portrait" | "landscape", cropH = 2000) {
   const idx = readJson<{ files: Record<string, any> }>(INDEX)?.files ?? {};
   const folders = new Set(libraryFolders().map((f) => f.name));
   const out: { file: string; name: string; w: number; h: number; duration: number; screens: number; outdoors: number; people: number; best: number; mine: boolean; at: number }[] = [];
   for (const [rel, e] of Object.entries(idx)) {
     if (!folders.has(rel.split("/")[0]) || !e?.orientation || e.error) continue;
     // a full 9:16 shot can also be cropped from a 4K landscape clip
-    const fits = e.orientation === needs || (needs === "portrait" && e.orientation === "landscape" && e.h >= 2000);
+    const fits = e.orientation === needs || (needs === "portrait" && e.orientation === "landscape" && e.h >= cropH);
     if (!fits) continue;
     // thumbnail at its best-looking moment
     const ms: any[] = Array.isArray(e.moments) ? e.moments : [];
@@ -165,7 +187,7 @@ export function clipsFor(p: Project, needs: "portrait" | "landscape") {
       if (!VIDEO.test(n) || n.startsWith(".")) continue;
       try {
         const pr = probe(path.join(dir, n));
-        if (pr.orientation !== needs && !(needs === "portrait" && pr.orientation === "landscape" && pr.h >= 2000)) continue;
+        if (pr.orientation !== needs && !(needs === "portrait" && pr.orientation === "landscape" && pr.h >= cropH)) continue;
         out.push({ file: path.relative(VIDEO_ROOT, path.join(dir, n)), name: n, w: pr.w, h: pr.h, duration: pr.duration, screens: 0, outdoors: 0, people: 0, best: 0, mine: true, at: Math.min(1, pr.duration / 2) });
       } catch {}
     }
@@ -176,8 +198,9 @@ export function clipsFor(p: Project, needs: "portrait" | "landscape") {
 
 /** The picker's best moments for a shot (story rules from the template), minus moments the edit already uses. */
 export function suggestions(p: Project, i: number): Promise<{ file: string; t: number; labels: string[]; score: number }[]> {
-  const { shots, story } = listShots(p);
-  const s = shots[i];
+  const { shots, story, mode } = listShots(p);
+  const s = shots.find((x) => x.i === i);
+  const cropH = mode === "broll" ? BROLL_CROP_H : 2000;
   if (!s || !s.needs) return Promise.resolve([]);
   const args = ["-I", PICK, "--pick", "--json", "--shape", s.needs === "portrait" ? "any" : "landscape", "--len", s.dur.toFixed(2), "--top", "40", "--per-clip", "3", "--gap", "2"];
   if (story?.never.length) args.push("--avoid", story.never.join(","));
@@ -199,7 +222,7 @@ export function suggestions(p: Project, i: number): Promise<{ file: string; t: n
       resolve(
         rows
           .filter((r) => !used.some((u) => u.f === r.file && r.t < u.b + 1 && r.t + s.dur > u.a - 1))
-          .filter((r) => s.needs !== "portrait" || r.shape === "portrait" || (clipW(r.file)?.h ?? 0) >= 2000)
+          .filter((r) => s.needs !== "portrait" || r.shape === "portrait" || (clipW(r.file)?.h ?? 0) >= cropH)
           .slice(0, 9)
           .map((r) => ({ file: r.file, t: r.t, labels: (r.labels ?? []).slice(0, 4), score: r.score })),
       );
@@ -321,3 +344,174 @@ export function logSwap(p: Project, entry: Record<string, unknown>) {
 
 export const shotsDirOf = (p: Project) => path.join(p.editDir, "shots");
 export { probe as probeClip };
+
+// ---- house-style edits: footage on the draft's B-roll track ----
+// Cards, boards and stage shots on the same track are graphics, not footage: Claude changes those from a comment.
+
+/** A 9:16 house edit centre-crops horizontal footage (any HD clip), so landscape clips from 1080 p up fit. */
+export const BROLL_CROP_H = 1080;
+const fixPath = (f: string, draftDir: string) => f.replace(/##_draftpath_placeholder_[^#]*_##/, draftDir);
+const sourcesFile = (p: Project) => path.join(p.editDir, "edit-data", "broll_sources.json");
+/** media: the graded copy the slot showed after the swap (undo puts the old media back but leaves this record) */
+type Source = { file: string | null; src: number | null; cx?: number; media?: string };
+
+function footageRoots(p: Project) {
+  return [...libraryFolders().map((f) => path.join(VIDEO_ROOT, f.name)), ...["raw", "resources", "shots"].map((d) => path.join(p.editDir, d))];
+}
+/** Graded copies (prep_broll), Signal's br_ shots, earlier swaps, or a clip straight from the footage folders. */
+function isFootage(abs: string, roots: string[]) {
+  const n = path.basename(abs);
+  if (/^(card_|chip_|captions|terminal|stage_|sg_)/i.test(n)) return false;
+  return /_graded\.mp4$/i.test(n) || /^(br|sw)_/i.test(n) || inside(abs, roots);
+}
+
+function brollSegs(p: Project) {
+  if (!p.draftDir) return { d: null as any, tall: false, segs: [] as { i: number; seg: any; abs: string }[] };
+  const d = readJson<any>(path.join(p.draftDir, "draft_info.json"));
+  const track = d?.tracks?.find((t: any) => t.type === "video" && t.name === "B-roll");
+  const vids = new Map<string, any>((d?.materials?.videos ?? []).map((v: any) => [v.id, v]));
+  const tall = (d?.canvas_config?.height ?? 1080) > (d?.canvas_config?.width ?? 1920);
+  const roots = footageRoots(p);
+  const segs = ((track?.segments ?? []) as any[])
+    .map((seg, i) => ({ i, seg, abs: fixPath(vids.get(seg.material_id)?.path ?? "", p.draftDir!) }))
+    .filter((x) => x.abs && isFootage(x.abs, roots));
+  return { d, tall, segs };
+}
+
+/** Where a b-roll shot came from: the last swap, the build's broll_plan.json (NN_<name>_graded.mp4 = row NN), or itself. */
+function originOf(p: Project, seg: any, abs: string): Source {
+  const src = seg.source_timerange.start / US;
+  const swapped = readJson<Record<string, Source>>(sourcesFile(p))?.[seg.id];
+  if (swapped && swapped.media === path.basename(abs)) return swapped;
+  if (inside(abs, [VIDEO_ROOT])) return { file: path.relative(VIDEO_ROOT, abs), src };
+  const m = path.basename(abs).match(/^(\d\d)_(.+)_graded\.mp4$/i);
+  const row = m ? readJson<any[]>(path.join(p.editDir, "edit-data", "broll_plan.json"))?.[Number(m[1])] : null;
+  if (m && row && typeof row.file === "string" && path.basename(row.file).replace(/\.[^.]+$/, "").replace(/\W+/g, "_") === m[2]) {
+    const a = path.isAbsolute(row.file) ? row.file : path.join(VIDEO_ROOT, row.file);
+    return { file: inside(a, [VIDEO_ROOT]) ? path.relative(VIDEO_ROOT, a) : path.basename(a), src: (Number(row.src) || 0) + src };
+  }
+  return { file: null, src: null };
+}
+
+/** Caption text comes from the composition's HTML. */
+const unescape = (t: string) =>
+  t.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (m, e: string) => {
+    const k = e.toLowerCase();
+    if (k[0] === "#") return String.fromCodePoint(k[1] === "x" ? parseInt(k.slice(2), 16) : parseInt(k.slice(1), 10));
+    return ({ amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" } as Record<string, string>)[k] ?? m;
+  });
+
+function brollList(p: Project): ShotList {
+  const { d, tall, segs } = brollSegs(p);
+  let caps: { start: number; dur: number; text: string }[] = [];
+  try {
+    caps = readModel(p).captions;
+  } catch {}
+  const shots = segs.map(({ i, seg, abs }, k): Shot => {
+    const start = seg.target_timerange.start / US;
+    const dur = seg.target_timerange.duration / US;
+    const o = originOf(p, seg, abs);
+    const said = unescape(caps.filter((c) => c.start < start + dur - 0.05 && c.start + c.dur > start + 0.05).map((c) => c.text).join(" ")).replace(/\s+/g, " ").trim();
+    // a graded copy whose original isn't recorded: show the clip's own name (C0506, not 01_C0506_graded.mp4)
+    const name = o.file ? path.basename(o.file) : path.basename(abs).replace(/^\d\d_/, "").replace(/_graded\.mp4$/i, "");
+    return {
+      i,
+      n: k + 1,
+      frame: tall ? "tall" : "wide",
+      part: "b-roll",
+      file: o.file,
+      name,
+      src: o.src,
+      frames: Math.round(dur * FPS),
+      dur,
+      start,
+      needs: tall ? "portrait" : "landscape",
+      shows: `${name}${o.src != null ? ` at ${o.src.toFixed(1)} s` : ""}`,
+      why: said ? `Said here: “${said.slice(0, 160)}”` : null,
+      cx: o.cx ?? 0.5,
+      sig: hashOf(`${abs}|${seg.source_timerange.start}|${seg.source_timerange.duration}`),
+    };
+  });
+  return { mode: "broll", shots, story: null, style: styleOf(p), total: (d?.duration ?? 0) / US };
+}
+
+function brollThumb(p: Project, i: number): string | null {
+  const x = brollSegs(p).segs.find((s) => s.i === i);
+  if (!x || !fs.existsSync(x.abs)) return null;
+  const sig = hashOf(`${x.abs}|${x.seg.source_timerange.start}|${x.seg.source_timerange.duration}`);
+  const dir = path.join(p.dataDir, "shots");
+  const out = path.join(dir, `b${i}-${sig}.jpg`);
+  if (fs.existsSync(out)) return out;
+  fs.mkdirSync(dir, { recursive: true });
+  for (const f of fs.readdirSync(dir)) if (f.startsWith(`b${i}-`)) fs.rmSync(path.join(dir, f), { force: true });
+  const t = (x.seg.source_timerange.start + x.seg.source_timerange.duration / 2) / US;
+  const r = spawnSync("ffmpeg", ["-v", "error", "-y", "-ss", t.toFixed(3), "-i", x.abs, "-frames:v", "1", "-vf", "scale=216:-2", out], { timeout: 20_000 });
+  return r.status === 0 && fs.existsSync(out) ? out : null;
+}
+
+const run = (cmd: string, args: string[]) =>
+  new Promise<void>((resolve, reject) => {
+    const ch = spawn(cmd, args, { stdio: ["ignore", "ignore", "pipe"] });
+    let err = "";
+    ch.stderr.on("data", (d) => (err = (err + d).slice(-2000)));
+    ch.on("close", (code) => (code === 0 ? resolve() : reject(new ShotError(500, `Grading failed: ${err.trim().split("\n").pop() || `exit ${code}`}`))));
+    ch.on("error", (e) => reject(new ShotError(500, e.message)));
+  });
+
+/**
+ * Swap b-roll shot i (its place on the B-roll track): grade the chosen part of the new clip like the rest of the edit
+ * (prep_broll.py one), then point only that segment at it. Its place and length on the timeline never change.
+ */
+export async function swapBroll(p: Project, i: number, b: SwapReq) {
+  const first = brollSegs(p);
+  const x = first.segs.find((s) => s.i === i);
+  if (!x) throw new ShotError(400, "That isn't footage b-roll: ask Claude in Comments to change a card or graphic.");
+  const clip = allowedClip(p, b.file);
+  const pr = probe(clip);
+  if (!first.tall && pr.orientation !== "landscape") throw new ShotError(400, "This edit is 16:9: pick a horizontal (landscape) clip.");
+  if (first.tall && pr.orientation === "landscape" && pr.h < BROLL_CROP_H) throw new ShotError(400, "That clip is too small to fill a 9:16 frame: pick a vertical clip or an HD horizontal one.");
+  const used = x.seg.source_timerange.duration / US;
+  const src = Number(b.src);
+  if (!Number.isFinite(src) || src < 0 || src + used > pr.duration + 0.01) throw new ShotError(400, `Pick a ${used.toFixed(2)} s part inside the clip.`);
+  const cxv = b.cx != null && Number.isFinite(Number(b.cx)) ? Math.max(0, Math.min(1, Number(b.cx))) : 0.5;
+  const rel = path.relative(VIDEO_ROOT, clip);
+  const before = originOf(p, x.seg, x.abs);
+  const stem = path.basename(clip).replace(/\.[^.]+$/, "").replace(/\W+/g, "_").slice(0, 40);
+  const name = `sw_${stem}_${hashOf(`${rel}|${src}|${cxv}|${Date.now()}`).slice(0, 8)}.mp4`;
+  await run(PY, ["-I", GRADE, "one", p.draftDir!, clip, src.toFixed(3), used.toFixed(3), name, ...(first.tall ? ["--format", "9:16"] : []), "--cx", cxv.toFixed(3)]);
+  const out = path.join(p.draftDir!, "claude_media", name);
+  const got = probe(out);
+
+  // the draft again (it was only read before grading); the room holds other changes off while a swap runs
+  const draftFile = path.join(p.draftDir!, "draft_info.json");
+  const d = JSON.parse(fs.readFileSync(draftFile, "utf8"));
+  const track = d.tracks.find((t: any) => t.type === "video" && t.name === "B-roll");
+  const seg = track?.segments?.[i];
+  if (!seg || seg.id !== x.seg.id) throw new ShotError(409, "The edit changed while the clip was graded: try again.");
+  const vids: any[] = d.materials.videos;
+  const old = vids.find((v) => v.id === seg.material_id);
+  const users = d.tracks.flatMap((t: any) => t.segments ?? []).filter((s: any) => s.material_id === seg.material_id).length;
+  const placeholder = [old, ...vids].map((v) => String(v?.path ?? "").match(/^##_draftpath_placeholder_[^#]*_##/)?.[0]).find(Boolean);
+  let mat = old;
+  if (!mat || users > 1) {
+    // another segment shows the same media: give this one its own
+    mat = { ...(old ? structuredClone(old) : { type: "video" }), id: crypto.randomUUID().toUpperCase() };
+    vids.push(mat);
+    seg.material_id = mat.id;
+  }
+  Object.assign(mat, { path: placeholder ? `${placeholder}/claude_media/${name}` : out, material_name: name, width: got.w, height: got.h, duration: Math.round(got.duration * US) });
+  seg.source_timerange.start = 0;
+  if (seg.clip) {
+    seg.clip.scale = { x: 1, y: 1 };
+    seg.clip.transform = { x: 0, y: 0 };
+  }
+  const tmp = draftFile + ".claude-tmp";
+  fs.writeFileSync(tmp, JSON.stringify(d));
+  fs.renameSync(tmp, draftFile);
+
+  const srcs = readJson<Record<string, Source>>(sourcesFile(p)) ?? {};
+  srcs[seg.id] = { file: rel, src: Math.round(src * 1000) / 1000, cx: cxv, media: name };
+  fs.mkdirSync(path.dirname(sourcesFile(p)), { recursive: true });
+  fs.writeFileSync(sourcesFile(p), JSON.stringify(srcs, null, 1));
+  return { before: { file: before.file, src: before.src }, after: { file: rel, src: Math.round(src * 1000) / 1000 }, dur: seg.target_timerange.duration / US, part: "b-roll", start: seg.target_timerange.start / US };
+}

@@ -16,11 +16,19 @@ type Props = {
 };
 
 const secs = (n: number) => `${n.toFixed(2)} s`;
+const FRAME = { tall: "full frame", strip: "wide strip", wide: "full frame" } as const;
+/** What a shot's clip has to be, in words. */
+const needsText = (s: Shot) =>
+  s.frame === "strip" ? "a horizontal clip" : s.frame === "wide" ? "a horizontal clip (16:9)" : s.part === "b-roll" ? "a vertical clip, or a horizontal one to crop" : "a vertical clip, or a 4K horizontal one to crop";
+/** The preview box: the shot's own shape. */
+const boxOf = (s: Shot) => (s.frame === "strip" ? { w: 1080, h: 707 } : s.frame === "wide" ? { w: 16, h: 9 } : { w: 9, h: 16 });
 const FPS = 30;
+const fmtAt = (t: number) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, "0")}`;
 
 /**
- * A montage edit's shots, like a CapCut template's slots: each one keeps its length (so the cuts stay on the beat)
- * and can be swapped for another clip from the footage folders or the phone, choosing exactly which part of it.
+ * Shots like a CapCut template's slots: a montage edit's shots, or a house-style edit's footage b-roll. Each keeps its
+ * place and length (so the cuts stay on the beat / the words) and can be swapped for another clip from the footage
+ * folders or the phone, choosing exactly which part of it.
  */
 export function ShotsPanel(p: Props) {
   const [list, setList] = useState<ShotList | null>(null);
@@ -30,7 +38,8 @@ export function ShotsPanel(p: Props) {
     load();
   }, [p.pid, p.stamp]);
   const shots = list?.shots ?? [];
-  const now = shots.findIndex((s) => p.time >= s.start && p.time < s.start + s.dur);
+  const now = shots.find((s) => p.time >= s.start && p.time < s.start + s.dur)?.i ?? -1;
+  const broll = list?.mode === "broll";
 
   return (
     <aside className={cx("flex min-h-0 shrink-0 flex-col bg-ink-900", p.full ? "w-full" : "w-[320px] border-l border-white/5 xl:w-[380px]")}>
@@ -47,15 +56,15 @@ export function ShotsPanel(p: Props) {
         <ol className="space-y-1.5">
           {shots.map((s) => (
             <li key={s.i} className={cx("flex items-center gap-2.5 rounded-lg p-1.5 ring-1", s.i === now ? "bg-gold/5 ring-gold/30" : "ring-white/5")}>
-              <button onClick={() => p.onSeek(s.start + 0.01)} className="relative shrink-0 overflow-hidden rounded-md bg-black" style={{ width: 54, height: 96 }} aria-label={`Play shot ${s.i + 1}`}>
+              <button onClick={() => p.onSeek(s.start + 0.01)} className="relative shrink-0 overflow-hidden rounded-md bg-black" style={s.frame === "wide" ? { width: 96, height: 54 } : { width: 54, height: 96 }} aria-label={`Play shot ${s.n}`}>
                 {s.file ? <img src={api.shotThumbUrl(p.pid, s.i, s.sig)} alt="" className="h-full w-full object-cover" loading="lazy" /> : null}
-                <span className="absolute left-1 top-1 rounded bg-black/70 px-1 text-[10px] font-semibold text-ink-100 tnum">{s.i + 1}</span>
+                <span className="absolute left-1 top-1 rounded bg-black/70 px-1 text-[10px] font-semibold text-ink-100 tnum">{s.n}</span>
               </button>
               <div className="min-w-0 flex-1">
-                <div className="flex items-baseline gap-2 text-[12px]">
-                  <span className="font-semibold capitalize text-ink-100">{s.part}</span>
-                  <span className="font-mono text-ink-500 tnum">{secs(s.dur)}</span>
-                  {s.needs && <span className="text-[11px] text-ink-500">{s.needs === "portrait" ? "full frame" : "wide strip"}</span>}
+                <div className="flex items-baseline gap-2 whitespace-nowrap text-[12px]">
+                  <span className={cx("font-semibold text-ink-100", s.part !== "b-roll" && "capitalize")}>{s.part === "b-roll" ? "B-roll" : s.part}</span>
+                  <span className="font-mono text-ink-500 tnum">{broll ? `at ${fmtAt(s.start)} · ${s.dur.toFixed(1)} s` : secs(s.dur)}</span>
+                  {s.frame && !broll && <span className="text-[11px] text-ink-500">{FRAME[s.frame]}</span>}
                 </div>
                 <div className="truncate text-[12px] text-ink-300">{s.shows ?? (s.file ? s.name : "black")}</div>
                 {s.why && <div className="line-clamp-2 text-[11px] leading-snug text-ink-500">{s.why}</div>}
@@ -68,9 +77,12 @@ export function ShotsPanel(p: Props) {
             </li>
           ))}
         </ol>
+        {list && shots.length === 0 && <p className="py-6 text-center text-[13px] text-ink-400">No footage b-roll in this edit.</p>}
         {shots.length > 0 && p.canSwap && (
           <p className="mt-3 text-[11px] leading-relaxed text-ink-500">
-            Swapping keeps each shot's length, so the cuts stay on the beat. Only that shot is re-rendered (15–40 s), and Undo is in Comments.
+            {broll
+              ? "Swapping keeps each b-roll's place and length, so it still lands on the same words. The new clip is graded like the rest (a few seconds), and Undo is in Comments. Cards and graphics aren't listed: ask Claude for those in Comments."
+              : "Swapping keeps each shot's length, so the cuts stay on the beat. Only that shot is re-rendered (15–40 s), and Undo is in Comments."}
           </p>
         )}
       </div>
@@ -123,7 +135,7 @@ function SwapSheet({ pid, shot, onClose, onError, onDone }: { pid: string; shot:
       setData({ clips: d.clips, suggestions: d.suggestions });
       const mine = d.clips.find((c) => c.mine && c.name === name);
       if (mine) setPick({ file: mine.file, name: mine.name, at: 0, duration: mine.duration });
-      else onError(`That clip doesn't fit this shot: it needs a ${shot.needs === "portrait" ? "vertical (or 4K horizontal)" : "horizontal"} video.`);
+      else onError(`That clip doesn't fit this shot: it needs ${needsText(shot)}.`);
     } catch (e: any) {
       if (e?.name !== "AbortError") onError(e.message);
     } finally {
@@ -136,7 +148,7 @@ function SwapSheet({ pid, shot, onClose, onError, onDone }: { pid: string; shot:
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 md:items-center" onClick={onClose}>
       <div
         role="dialog"
-        aria-label={`Swap shot ${shot.i + 1}`}
+        aria-label={`Swap shot ${shot.n}`}
         onClick={(e) => e.stopPropagation()}
         className="flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-2xl bg-ink-900 ring-1 ring-white/10 md:max-w-2xl md:rounded-2xl"
       >
@@ -148,10 +160,13 @@ function SwapSheet({ pid, shot, onClose, onError, onDone }: { pid: string; shot:
           )}
           <div className="min-w-0 flex-1">
             <div className="text-[14px] font-semibold text-ink-100">
-              Swap shot {shot.i + 1} <span className="font-normal capitalize text-ink-400">· {shot.part} · {secs(shot.dur)}</span>
+              {shot.part === "b-roll" ? `Swap b-roll ${shot.n}` : `Swap shot ${shot.n}`}{" "}
+              <span className={cx("font-normal text-ink-400", shot.part !== "b-roll" && "capitalize")}>
+                · {shot.part === "b-roll" ? `at ${fmtAt(shot.start)}` : shot.part} · {secs(shot.dur)}
+              </span>
             </div>
             <div className="truncate text-[12px] text-ink-500">
-              {pick ? pick.name : `Needs a ${shot.needs === "portrait" ? "full 9:16 frame (vertical, or cropped from 4K)" : "wide strip (horizontal clip)"}. Now: ${shot.shows ?? shot.name}`}
+              {pick ? pick.name : `Needs ${needsText(shot)}. Now: ${shot.shows ?? shot.name}`}
             </div>
           </div>
           <button onClick={onClose} className="rounded-md px-2 py-1 text-[13px] text-ink-400 hover:text-ink-100" aria-label="Close">
@@ -184,9 +199,11 @@ function SwapSheet({ pid, shot, onClose, onError, onDone }: { pid: string; shot:
               {!data && <p className="py-8 text-center text-[13px] text-ink-400">Finding clips that fit…</p>}
               {data && tab === "suggested" && (
                 <>
-                  <p className="mb-2 text-[11px] text-ink-500">Best-looking moments that fit the story, labelled on this Mac. Moments the edit already uses are left out.</p>
+                  <p className="mb-2 text-[11px] text-ink-500">
+                    {shot.part === "b-roll" ? "Best-looking moments of the right shape" : "Best-looking moments that fit the story"}, labelled on this Mac. Moments the edit already uses are left out.
+                  </p>
                   {data.suggestions.length === 0 && <p className="py-6 text-center text-[13px] text-ink-400">No suggestions: try Your clips, or add one from your phone.</p>}
-                  <div className={cx("grid gap-2", shot.needs === "portrait" ? "grid-cols-3 md:grid-cols-4" : "grid-cols-2 md:grid-cols-3")}>
+                  <div className={cx("grid gap-2", shot.frame === "tall" ? "grid-cols-3 md:grid-cols-4" : "grid-cols-2 md:grid-cols-3")}>
                     {data.suggestions.map((s) => (
                       <button key={`${s.file}@${s.t}`} onClick={() => setPick({ file: s.file, name: s.file.split("/").pop()!, at: s.t })} className="group overflow-hidden rounded-lg bg-black text-left ring-1 ring-white/10 hover:ring-gold/50">
                         <img src={api.clipFrameUrl(pid, s.file, s.t)} alt="" loading="lazy" className="aspect-video w-full object-cover" />
@@ -231,6 +248,10 @@ function Trimmer({ pid, shot, pick, onError, onDone }: { pid: string; shot: Shot
   const [dur, setDur] = useState(pick.duration ?? 0);
   const [start, setStart] = useState(Math.max(0, pick.at));
   const [frame, setFrame] = useState(0.5);
+  const box = boxOf(shot);
+  // the clip's shape once it loads: the framing slider only matters when the clip is cropped to fit
+  const [shape, setShape] = useState<{ w: number; h: number } | null>(null);
+  const cropsSideways = !shape || shape.w / shape.h > box.w / box.h + 0.01;
   const [saving, setSaving] = useState(false);
   const video = useRef<HTMLVideoElement>(null);
   const len = shot.dur;
@@ -282,7 +303,7 @@ function Trimmer({ pid, shot, pick, onError, onDone }: { pid: string; shot: Shot
 
   const clampStart = (t: number) => Math.max(0, Math.min(max, Math.round(t * FPS) / FPS));
   const nudge = (d: number) => setStart((s) => clampStart(s + d));
-  const box = shot.needs === "portrait" ? { w: 9, h: 16 } : { w: 1080, h: 707 };
+  const tall = shot.frame === "tall";
   const save = async () => {
     setSaving(true);
     try {
@@ -297,7 +318,7 @@ function Trimmer({ pid, shot, pick, onError, onDone }: { pid: string; shot: Shot
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-4">
-      <div className="mx-auto overflow-hidden rounded-lg bg-black ring-1 ring-white/10" style={{ aspectRatio: `${box.w} / ${box.h}`, maxHeight: shot.needs === "portrait" ? "46dvh" : undefined, width: shot.needs === "portrait" ? "auto" : "100%" }}>
+      <div className="mx-auto overflow-hidden rounded-lg bg-black ring-1 ring-white/10" style={{ aspectRatio: `${box.w} / ${box.h}`, maxHeight: tall ? "46dvh" : undefined, width: tall ? "auto" : "100%" }}>
         {url ? (
           <video
             ref={video}
@@ -305,7 +326,10 @@ function Trimmer({ pid, shot, pick, onError, onDone }: { pid: string; shot: Shot
             muted
             playsInline
             preload="auto"
-            onLoadedMetadata={(e) => setDur(e.currentTarget.duration || dur)}
+            onLoadedMetadata={(e) => {
+              setDur(e.currentTarget.duration || dur);
+              setShape({ w: e.currentTarget.videoWidth, h: e.currentTarget.videoHeight });
+            }}
             className="h-full w-full object-cover"
             style={{ objectPosition: `${frame * 100}% 50%` }}
           />
@@ -356,13 +380,13 @@ function Trimmer({ pid, shot, pick, onError, onDone }: { pid: string; shot: Shot
         </div>
       </div>
 
-      <label className="mt-4 block text-[12px] text-ink-300">
+      <label className={cx("mt-4 block text-[12px] text-ink-300", !cropsSideways && "hidden")}>
         Framing <span className="text-ink-500">(slide to move the picture left or right)</span>
         <input type="range" min={0} max={1} step={0.01} value={frame} onChange={(e) => setFrame(Number(e.target.value))} className="mt-1.5 w-full accent-[var(--color-gold)]" />
       </label>
 
       <div className="mt-5 flex items-center justify-end gap-3">
-        {saving && <span className="text-[12px] text-ink-400">Rendering the shot… 15–40 s</span>}
+        {saving && <span className="text-[12px] text-ink-400">{shot.part === "b-roll" ? "Grading the clip… about 5–15 s" : "Rendering the shot… 15–40 s"}</span>}
         <button onClick={save} disabled={saving || !dur || dur < len} className="rounded-lg bg-gold px-4 py-2 text-[13px] font-semibold text-ink-950 hover:brightness-110 disabled:opacity-40">
           {saving ? "Saving…" : "Use this part"}
         </button>

@@ -77,6 +77,11 @@ npm run dev        # server on :4310 + app on http://127.0.0.1:5310 (also keeps 
   exact part with a window locked to the shot's length, looped and framed as it'll look. Only that shot re-renders
   (`montage_render.py`), so the beat timing never moves; Undo and History work as for cuts, and each swap is logged in
   the template's `swaps.jsonl` so later builds pick the way you do (`server/shots.ts`).
+  House-style edits get the same tab for their **footage b-roll** (the draft's B-roll track; cards, boards and stage
+  shots are left to comments): a swap grades the chosen part like the rest of the edit (`prep_broll.py one`, a few
+  seconds) and points only that slot at it, keeping its place and length, so it still lands on the same words. Where
+  each slot came from is kept in `edit-data/broll_sources.json`; swaps are logged in `edit-data/swaps.jsonl`.
+  Folders named with a date code (`1119 stage test`, `1120 edit`) are your own work, never offered as footage.
 - **Music** (in New edit): **None** (voice only, the default), **Claude picks**, or a track from `Video Editor/background
   music/` with a play button. Tracks are measured into its `catalog.json` (BPM, beat times, hits) by the skill's
   `music_catalog.py` the first time they're listed (`server/music.ts`), so cuts can land on the beat. Add tracks by

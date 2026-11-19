@@ -22,6 +22,10 @@ const postJson = (url: string, body: unknown) => send("POST", url, body);
 export type TemplateInfo = { slug: string; title: string; from: string | null; needs: string | null; useWhen: string | null; track: string | null; line: string | null };
 export type Shot = {
   i: number;
+  /** number shown to the user */
+  n: number;
+  /** tall = full 9:16 frame, strip = a montage's wide band, wide = full 16:9 frame */
+  frame: "tall" | "strip" | "wide" | null;
   part: string;
   file: string | null;
   name: string | null;
@@ -35,7 +39,7 @@ export type Shot = {
   cx: number;
   sig: string;
 };
-export type ShotList = { shots: Shot[]; story: { line: string | null; show: string[]; never: string[] } | null; style: string | null; total: number };
+export type ShotList = { mode: "montage" | "broll" | null; shots: Shot[]; story: { line: string | null; show: string[]; never: string[] } | null; style: string | null; total: number };
 export type LibClip = { file: string; name: string; w: number; h: number; duration: number; screens: number; outdoors: number; people: number; best: number; mine: boolean; at: number };
 export type Suggestion = { file: string; t: number; labels: string[]; score: number };
 export type Track = {
