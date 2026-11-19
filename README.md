@@ -82,6 +82,11 @@ npm run dev        # server on :4310 + app on http://127.0.0.1:5310 (also keeps 
   seconds) and points only that slot at it, keeping its place and length, so it still lands on the same words. Where
   each slot came from is kept in `edit-data/broll_sources.json`; swaps are logged in `edit-data/swaps.jsonl`.
   Folders named with a date code (`1119 stage test`, `1120 edit`) are your own work, never offered as footage.
+  **Browse…** opens any folder on the Mac from the Mac or the phone: Desktop, Downloads, Movies, Documents, the video
+  folder and any card or drive plugged in (a Sony card opens straight at its clips). Clips are used where they are; a
+  montage swap copies just the chosen part (plus a second either side, 10-bit HEVC) into the edit's `shots/` folder, so
+  the edit still works after the card is ejected. **Upload from this device…** (inside Browse) is for clips that only
+  exist on the phone. ~/Library and hidden folders are never listed.
 - **Music** (in New edit): **None** (voice only, the default), **Claude picks**, or a track from `Video Editor/background
   music/` with a play button. Tracks are measured into its `catalog.json` (BPM, beat times, hits) by the skill's
   `music_catalog.py` the first time they're listed (`server/music.ts`), so cuts can land on the beat. Add tracks by

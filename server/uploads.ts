@@ -111,7 +111,7 @@ export async function putChunk(p: Project, key: string, offset: number, req: htt
     }
     const received = size(part);
     if (received < meta.size) return { key, name: meta.name, size: meta.size, received, done: false };
-    const dir = destDir(p, meta.dest === "resources" ? "resources" : "raw");
+    const dir = destDir(p, meta.dest === "resources" || meta.dest === "shots" ? meta.dest : "raw");
     fs.mkdirSync(dir, { recursive: true });
     let dest = path.join(dir, meta.name);
     for (let i = 2; fs.existsSync(dest); i++) dest = path.join(dir, meta.name.replace(/(\.[^.]+)$/, ` (${i})$1`));

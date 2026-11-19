@@ -9,6 +9,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { DATA_DIR, SKILL_DIR, VIDEO_ROOT, inside } from "./config.ts";
 import { readModel, type Project } from "./projects.ts";
@@ -145,13 +146,110 @@ export function shotThumb(p: Project, i: number): string | null {
 
 const hashOf = (s: string) => crypto.createHash("sha1").update(s).digest("hex").slice(0, 16);
 
-/** A clip a swap may use: in one of the footage folders, or this edit's own raw/, resources/ or shots/ (phone uploads). */
+/**
+ * A clip a swap may use: in one of the footage folders, this edit's own raw/, resources/ or shots/ (phone uploads), or
+ * anywhere Browse can reach on this Mac (home folders, a camera card). `rel` is relative to the video folder, or a
+ * full path for a browsed clip.
+ */
 export function allowedClip(p: Project, rel: unknown): string {
-  if (typeof rel !== "string" || !rel || rel.length > 400 || !VIDEO.test(rel)) throw new ShotError(400, "Pick a video clip.");
+  if (typeof rel !== "string" || !rel || rel.length > 1000 || !VIDEO.test(rel)) throw new ShotError(400, "Pick a video clip.");
   const abs = path.resolve(VIDEO_ROOT, rel);
   const roots = [...libraryFolders().map((f) => path.join(VIDEO_ROOT, f.name)), ...["raw", "resources", "shots"].map((d) => path.join(p.editDir, d))];
-  if (!inside(abs, roots) || !fs.existsSync(abs)) throw new ShotError(400, "That clip isn't in your footage folders.");
+  if (!fs.existsSync(abs) || !(inside(abs, roots) || browsable(abs))) throw new ShotError(400, "That clip can't be used (it isn't in your folders, or it's gone: is the card still in?).");
   return abs;
+}
+
+// ---- Browse: any folder on this Mac (home folders, a camera card), from the Mac or the phone ----
+
+const HOME = os.homedir();
+const hiddenIn = (abs: string) => abs.split(path.sep).some((seg) => seg.startsWith("."));
+/** Home (not ~/Library, except the video folder in iCloud Drive) and mounted cards/drives; never hidden folders. */
+function browsable(abs: string): boolean {
+  let r: string;
+  try {
+    r = fs.realpathSync(abs);
+  } catch {
+    return false;
+  }
+  if (hiddenIn(r)) return false;
+  if (inside(r, [VIDEO_ROOT])) return true;
+  if (inside(r, [path.join(HOME, "Library")])) return false;
+  if (inside(r, [HOME])) return true;
+  return r.startsWith("/Volumes/") && r.split(path.sep).length > 2;
+}
+
+export function browseRoots(): { name: string; path: string }[] {
+  const out = [{ name: "Video Editor", path: VIDEO_ROOT }];
+  for (const n of ["Desktop", "Downloads", "Movies", "Documents"]) if (fs.existsSync(path.join(HOME, n))) out.push({ name: n, path: path.join(HOME, n) });
+  let vols: string[] = [];
+  try {
+    vols = fs.readdirSync("/Volumes");
+  } catch {}
+  for (const v of vols) {
+    const base = path.join("/Volumes", v);
+    // the Mac's own disk resolves to / and is left out, and so are macOS's helper volumes
+    if (v.startsWith(".") || /^(Recovery|Preboot|VM|Update|Data)$/i.test(v) || !browsable(base)) continue;
+    // camera cards: straight to the clips (Sony PRIVATE/M4ROOT/CLIP, others DCIM)
+    const deep = ["PRIVATE/M4ROOT/CLIP", "DCIM"].map((d) => path.join(base, d)).find((d) => fs.existsSync(d));
+    out.push({ name: v, path: deep ?? base });
+  }
+  return out;
+}
+
+export type BrowseList = {
+  dir: string | null;
+  parent: string | null;
+  roots: { name: string; path: string }[];
+  dirs: { name: string; path: string }[];
+  clips: { name: string; path: string; size: number; mtime: number }[];
+};
+export function browse(dir: unknown): BrowseList {
+  const roots = browseRoots();
+  if (typeof dir !== "string" || !dir) return { dir: null, parent: null, roots, dirs: [], clips: [] };
+  const abs = path.resolve(dir);
+  if (!browsable(abs) || !fs.statSync(abs, { throwIfNoEntry: false })?.isDirectory()) throw new ShotError(400, "That folder can't be opened.");
+  const dirs: BrowseList["dirs"] = [];
+  const clips: BrowseList["clips"] = [];
+  for (const e of fs.readdirSync(abs, { withFileTypes: true })) {
+    if (e.name.startsWith(".")) continue;
+    const f = path.join(abs, e.name);
+    if (e.isDirectory()) {
+      if (dirs.length < 400 && browsable(f)) dirs.push({ name: e.name, path: f });
+    } else if (VIDEO.test(e.name) && clips.length < 600) {
+      const st = fs.statSync(f, { throwIfNoEntry: false });
+      if (st?.isFile()) clips.push({ name: e.name, path: f, size: st.size, mtime: st.mtimeMs });
+    }
+  }
+  dirs.sort((a, b) => a.name.localeCompare(b.name));
+  clips.sort((a, b) => b.mtime - a.mtime); // newest first: what you just shot
+  const up = path.dirname(abs);
+  return { dir: abs, parent: up !== abs && browsable(up) ? up : null, roots, dirs, clips };
+}
+
+/**
+ * A montage renders from its source files whenever a shot changes, so a clip from outside the video folder (a card
+ * that will be ejected, Downloads) is copied in first: only the chosen part plus a second either side, 10-bit HEVC,
+ * into the edit's shots/ folder. Returns where montage.json should point.
+ */
+export async function keepLocal(p: Project, abs: string, src: number, dur: number): Promise<{ file: string; src: number }> {
+  if (inside(abs, [VIDEO_ROOT])) return { file: path.relative(VIDEO_ROOT, abs), src };
+  const pre = Math.min(1, src);
+  const from = src - pre;
+  const dir = shotsDirOf(p);
+  fs.mkdirSync(dir, { recursive: true });
+  const stem = path.basename(abs).replace(/\.[^.]+$/, "").replace(/[^\w .-]+/g, "_").slice(0, 60);
+  const out = path.join(dir, `${stem} from ${from.toFixed(2)}s.mp4`);
+  const st = spawnSync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=color_primaries,color_transfer,color_space", "-of", "json", abs], { encoding: "utf8", timeout: 60_000 });
+  const c = JSON.parse(st.stdout || "{}").streams?.[0] ?? {};
+  const tag = (flag: string, v: unknown) => (typeof v === "string" && /^[\w-]+$/.test(v) && v !== "unknown" ? [flag, v] : []);
+  const tmp = out + ".part.mp4";
+  await run("ffmpeg", ["-nostdin", "-v", "error", "-y", "-ss", from.toFixed(3), "-t", (pre + dur + 1).toFixed(3), "-i", abs, "-map", "0:v:0", "-c:v", "hevc_videotoolbox", "-profile:v", "main10", "-pix_fmt", "p010le", "-b:v", "80M", "-tag:v", "hvc1",
+    ...tag("-color_primaries", c.color_primaries), ...tag("-color_trc", c.color_transfer), ...tag("-colorspace", c.color_space), "-an", tmp]).catch((e) => {
+    fs.rmSync(tmp, { force: true });
+    throw e;
+  });
+  fs.renameSync(tmp, out);
+  return { file: path.relative(VIDEO_ROOT, out), src: Math.round(pre * 1000) / 1000 };
 }
 
 type Probe = { w: number; h: number; orientation: "landscape" | "portrait" | "square"; duration: number };
@@ -231,15 +329,24 @@ export function suggestions(p: Project, i: number): Promise<{ file: string; t: n
   });
 }
 
-/** One frame of a clip (for picker thumbnails), cached. */
-export function clipFrame(p: Project, rel: unknown, t: unknown): string | null {
+/** One frame of a clip (for picker thumbnails), cached. A few at a time: a card full of 4K clips must not stall the room. */
+let framing = 0;
+const frameQueue: (() => void)[] = [];
+export async function clipFrame(p: Project, rel: unknown, t: unknown): Promise<string | null> {
   const abs = allowedClip(p, rel);
   const at = Math.max(0, Math.min(86_400, Number(t) || 0));
   const out = path.join(CACHE, "frames", `${hashOf(abs)}-${at.toFixed(2)}.jpg`);
   if (fs.existsSync(out)) return out;
   fs.mkdirSync(path.dirname(out), { recursive: true });
-  const r = spawnSync("ffmpeg", ["-v", "error", "-y", "-ss", at.toFixed(2), "-i", abs, "-frames:v", "1", "-vf", "scale=320:-2", out], { timeout: 60_000 });
-  return r.status === 0 && fs.existsSync(out) ? out : null;
+  if (framing >= 3) await new Promise<void>((r) => frameQueue.push(r));
+  framing++;
+  try {
+    await run("ffmpeg", ["-nostdin", "-v", "error", "-y", "-ss", at.toFixed(2), "-i", abs, "-frames:v", "1", "-vf", "scale=320:-2", out]).catch(() => {});
+  } finally {
+    framing--;
+    frameQueue.shift()?.();
+  }
+  return fs.existsSync(out) ? out : null;
 }
 
 // A small H.264 copy of a clip for scrubbing on the phone (4K HEVC / 10-bit camera files don't play everywhere).
@@ -294,7 +401,7 @@ export function renderMontage(p: Project): Promise<void> {
 
 export type SwapReq = { file?: unknown; src?: unknown; cx?: unknown; cy?: unknown; zoom?: unknown };
 /** Change shot i in montage.json (same length); returns what changed, for the comment and the swap log. */
-export function applySwap(p: Project, i: number, b: SwapReq) {
+export function applySwap(p: Project, i: number, b: SwapReq, from?: { name: string; src: number }) {
   const m = plan(p);
   const c = m.clips[i];
   if (!c || c.file === null) throw new ShotError(400, "That shot can't be swapped.");
@@ -319,12 +426,13 @@ export function applySwap(p: Project, i: number, b: SwapReq) {
     delete c.cy;
     delete c.zoom;
   }
-  c.shows = `${path.basename(rel)} at ${src.toFixed(1)} s`;
+  // a part copied in from a card: name the original clip and time, not the copy
+  c.shows = from ? `${from.name} at ${from.src.toFixed(1)} s` : `${path.basename(rel)} at ${src.toFixed(1)} s`;
   c.why = "swapped in by hand in Edit Room";
   const tmp = montageFile(p) + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(m, null, 1));
   fs.renameSync(tmp, montageFile(p));
-  return { before, after: { file: rel, src: c.src }, dur, part: c.part };
+  return { before, after: { file: rel, src: c.src }, dur, part: c.part, label: c.shows };
 }
 
 /** What the user took out and put in, next to the template (or the edit), so later builds learn from it. */

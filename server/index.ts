@@ -23,7 +23,7 @@ import { versionProject } from "./versions.ts";
 import { readUsage } from "./usage.ts";
 import { checksState, scheduleChecks, setOk } from "./checks.ts";
 import { MUSIC_DIR, listMusic, musicFile } from "./music.ts";
-import { BROLL_CROP_H, ShotError, clipFrame, clipPreview, clipsFor, hasShots, listShots, previewFile, shotThumb, suggestions } from "./shots.ts";
+import { BROLL_CROP_H, ShotError, browse, clipFrame, clipPreview, clipsFor, hasShots, listShots, previewFile, shotThumb, suggestions } from "./shots.ts";
 import { autoTemplates, templateKit, WILD_ROOT, WildError, folderOf, listTemplates, templateOf, listWild, recoverWildJobs, setDecision, startPlan, startTemplate, stopWildJob, wildDetail, wildFile, type Decision } from "./wildcards.ts";
 import { DRIVER, GSAP_CDN_SRC, LOCAL_GSAP, OVERLAY_CSP, localGsapUrl, stillSeek } from "./overlay.ts";
 
@@ -471,10 +471,19 @@ app.get("/api/projects/:id/shots/:i/clips", need("editor"), withProject(async (p
     shotErr(res, e);
   }
 }));
-app.get("/media/:id/clip-frame", need("editor"), withProject((p, req, res) => {
+// Browse: folders on this Mac and its cards, to swap in a clip from anywhere (folder paths: full editors only)
+app.get("/api/projects/:id/browse", need("editor"), withProject((p, req, res) => {
+  if (!shotOk(req)) return res.status(403).json({ error: "Only people with access to every project can browse this Mac." });
+  try {
+    res.json(browse(req.query.dir));
+  } catch (e) {
+    shotErr(res, e);
+  }
+}));
+app.get("/media/:id/clip-frame", need("editor"), withProject(async (p, req, res) => {
   if (!shotOk(req)) return res.status(403).end();
   try {
-    const f = clipFrame(p, req.query.f, req.query.t);
+    const f = await clipFrame(p, req.query.f, req.query.t);
     if (!f) return res.status(404).end();
     res.set("Cache-Control", "private, max-age=86400").sendFile(f);
   } catch (e) {

@@ -42,6 +42,13 @@ export type Shot = {
 export type ShotList = { mode: "montage" | "broll" | null; shots: Shot[]; story: { line: string | null; show: string[]; never: string[] } | null; style: string | null; total: number };
 export type LibClip = { file: string; name: string; w: number; h: number; duration: number; screens: number; outdoors: number; people: number; best: number; mine: boolean; at: number };
 export type Suggestion = { file: string; t: number; labels: string[]; score: number };
+export type BrowseList = {
+  dir: string | null;
+  parent: string | null;
+  roots: { name: string; path: string }[];
+  dirs: { name: string; path: string }[];
+  clips: { name: string; path: string; size: number; mtime: number }[];
+};
 export type Track = {
   path: string;
   name: string;
@@ -62,6 +69,7 @@ export const api = {
   wildDecision: (id: string, state: "new" | "reference" | "dismissed") => postJson(`/api/wildcards/${encodeURIComponent(id)}/decision`, { state }).then(j),
   wildPlan: (id: string, idea: number, note: string) => postJson(`/api/wildcards/${encodeURIComponent(id)}/plan`, { idea, note }).then(j),
   shots: (id: string) => fetch(`/api/projects/${id}/shots`).then(j<ShotList>),
+  browse: (id: string, dir?: string | null) => fetch(`/api/projects/${id}/browse${dir ? `?dir=${encodeURIComponent(dir)}` : ""}`).then(j<BrowseList>),
   shotClips: (id: string, i: number) => fetch(`/api/projects/${id}/shots/${i}/clips`).then(j<{ shot: Shot; clips: LibClip[]; suggestions: Suggestion[] }>),
   clipPreview: (id: string, f: string) => fetch(`/api/projects/${id}/clip-preview?f=${encodeURIComponent(f)}`).then(j<{ state: "ready" | "working" | "failed"; url: string | null }>),
   clipFrameUrl: (id: string, f: string, t: number) => `/media/${encodeURIComponent(id)}/clip-frame?f=${encodeURIComponent(f)}&t=${t.toFixed(2)}`,

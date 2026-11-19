@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type LibClip, type Shot, type ShotList, type Suggestion } from "../api";
+import { api, type BrowseList, type LibClip, type Shot, type ShotList, type Suggestion } from "../api";
 import { uploadFile } from "../upload";
 import { cx } from "../util";
 
@@ -106,7 +106,7 @@ type Pick = { file: string; name: string; at: number; duration?: number };
 
 function SwapSheet({ pid, shot, onClose, onError, onDone }: { pid: string; shot: Shot; onClose: () => void; onError: (e: string) => void; onDone: () => void }) {
   const [data, setData] = useState<{ clips: LibClip[]; suggestions: Suggestion[] } | null>(null);
-  const [tab, setTab] = useState<"suggested" | "clips">("suggested");
+  const [tab, setTab] = useState<"suggested" | "clips" | "browse">("suggested");
   const [pick, setPick] = useState<Pick | null>(null);
   const [upload, setUpload] = useState<{ name: string; pct: number } | null>(null);
   const file = useRef<HTMLInputElement>(null);
@@ -135,7 +135,7 @@ function SwapSheet({ pid, shot, onClose, onError, onDone }: { pid: string; shot:
       setData({ clips: d.clips, suggestions: d.suggestions });
       const mine = d.clips.find((c) => c.mine && c.name === name);
       if (mine) setPick({ file: mine.file, name: mine.name, at: 0, duration: mine.duration });
-      else onError(`That clip doesn't fit this shot: it needs ${needsText(shot)}.`);
+      else onError(`${name} is added, but it doesn't fit this shot: it needs ${needsText(shot)}.`);
     } catch (e: any) {
       if (e?.name !== "AbortError") onError(e.message);
     } finally {
@@ -183,6 +183,7 @@ function SwapSheet({ pid, shot, onClose, onError, onDone }: { pid: string; shot:
                 [
                   ["suggested", `Suggested${data ? ` ${data.suggestions.length}` : ""}`],
                   ["clips", `Your clips${data ? ` ${data.clips.length}` : ""}`],
+                  ["browse", "Browse"],
                 ] as const
               ).map(([k, label]) => (
                 <button key={k} onClick={() => setTab(k)} className={cx("rounded-md px-2.5 py-1 text-[12px] font-medium", tab === k ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-200")}>
@@ -190,13 +191,16 @@ function SwapSheet({ pid, shot, onClose, onError, onDone }: { pid: string; shot:
                 </button>
               ))}
               <div className="flex-1" />
-              <button onClick={() => file.current?.click()} disabled={!!upload} className="rounded-md bg-gold px-2.5 py-1 text-[12px] font-semibold text-ink-950 hover:brightness-110 disabled:opacity-50">
-                {upload ? `Uploading ${upload.pct}%` : "From phone…"}
+              <button onClick={() => setTab("browse")} disabled={!!upload} className={cx(tab === "browse" && !upload && "hidden", "rounded-md bg-gold")} >
+                {upload ? `Uploading ${upload.pct}%` : "Browse…"}
               </button>
               <input ref={file} type="file" accept="video/*" className="hidden" onChange={(e) => (fromPhone(e.target.files?.[0]), (e.target.value = ""))} />
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-3">
-              {!data && <p className="py-8 text-center text-[13px] text-ink-400">Finding clips that fit…</p>}
+              {tab === "browse" && (
+                <Browser pid={pid} onPick={(c) => setPick({ file: c.path, name: c.name, at: 0 })} onUpload={() => file.current?.click()} upload={upload} onError={onError} />
+              )}
+              {!data && tab !== "browse" && <p className="py-8 text-center text-[13px] text-ink-400">Finding clips that fit…</p>}
               {data && tab === "suggested" && (
                 <>
                   <p className="mb-2 text-[11px] text-ink-500">
@@ -242,6 +246,89 @@ function SwapSheet({ pid, shot, onClose, onError, onDone }: { pid: string; shot:
   );
 }
 
+const LAST_DIR = "room.browseDir";
+const sizeText = (n: number) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(n / 1e6))} MB`);
+
+/**
+ * Any folder on the Mac (home folders, a camera card) from the Mac or the phone: clips are used where they are, and a
+ * montage copies just the chosen part in. Upload is for clips that are on this device only (the phone's library).
+ */
+function Browser({ pid, onPick, onUpload, upload, onError }: { pid: string; onPick: (c: BrowseList["clips"][number]) => void; onUpload: () => void; upload: { name: string; pct: number } | null; onError: (e: string) => void }) {
+  const [list, setList] = useState<BrowseList | null>(null);
+  const open = (dir: string | null): Promise<void> =>
+    api
+      .browse(pid, dir)
+      .then((l) => {
+        setList(l);
+        try {
+          if (l.dir) localStorage.setItem(LAST_DIR, l.dir);
+        } catch {}
+      })
+      .catch((e): Promise<void> | void => (dir ? open(null) : onError(e.message)));
+  useEffect(() => {
+    let last: string | null = null;
+    try {
+      last = localStorage.getItem(LAST_DIR);
+    } catch {}
+    open(last);
+  }, []);
+  if (!list) return <p className="py-8 text-center text-[13px] text-ink-400">Opening…</p>;
+  const crumbs = list.dir ? list.dir.split("/").filter(Boolean) : [];
+  return (
+    <div>
+      <div className="mb-2 flex flex-wrap gap-1.5">
+        {list.roots.map((r) => (
+          <button key={r.path} onClick={() => open(r.path)} className={cx("rounded-full px-2.5 py-1 text-[11px] ring-1", list.dir === r.path ? "bg-gold/15 text-gold ring-gold/40" : "text-ink-300 ring-white/10 hover:bg-white/5")}>
+            {r.name}
+          </button>
+        ))}
+        <button onClick={onUpload} disabled={!!upload} className="rounded-full px-2.5 py-1 text-[11px] text-ink-300 ring-1 ring-dashed ring-white/20 hover:bg-white/5 disabled:opacity-50">
+          {upload ? `Uploading ${upload.name} · ${upload.pct}%` : "Upload from this device…"}
+        </button>
+      </div>
+      {list.dir ? (
+        <>
+          <div className="mb-2 flex items-center gap-2 text-[11px] text-ink-500">
+            {list.parent && (
+              <button onClick={() => open(list.parent)} className="rounded-md px-1.5 py-0.5 text-ink-300 ring-1 ring-white/10 hover:bg-white/5" aria-label="Up one folder">
+                ↑ Up
+              </button>
+            )}
+            <span className="truncate" title={list.dir}>
+              {crumbs.slice(-3).join(" / ")}
+            </span>
+          </div>
+          {list.dirs.length > 0 && (
+            <div className="mb-3 grid grid-cols-2 gap-1.5 md:grid-cols-3">
+              {list.dirs.map((d) => (
+                <button key={d.path} onClick={() => open(d.path)} className="truncate rounded-md px-2.5 py-1.5 text-left text-[12px] text-ink-200 ring-1 ring-white/10 hover:bg-white/5">
+                  📁 {d.name}
+                </button>
+              ))}
+            </div>
+          )}
+          {list.clips.length === 0 && list.dirs.length === 0 && <p className="py-6 text-center text-[13px] text-ink-400">No videos in this folder.</p>}
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
+            {list.clips.map((c) => (
+              <button key={c.path} onClick={() => onPick(c)} className="overflow-hidden rounded-lg bg-black text-left ring-1 ring-white/10 hover:ring-gold/50">
+                <img src={api.clipFrameUrl(pid, c.path, 1)} alt="" loading="lazy" className="aspect-video w-full object-cover" />
+                <div className="px-2 py-1.5">
+                  <div className="truncate text-[11px] text-ink-200">{c.name}</div>
+                  <div className="text-[10px] text-ink-500 tnum">
+                    {sizeText(c.size)} · {new Date(c.mtime).toLocaleDateString(undefined, { day: "numeric", month: "short" })}
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </>
+      ) : (
+        <p className="py-6 text-center text-[13px] text-ink-400">Pick a place above: your folders, or a camera card plugged into the Mac.</p>
+      )}
+    </div>
+  );
+}
+
 /** Pick which part of the clip fills the shot: a window locked to the shot's length, looped and framed as it'll look. */
 function Trimmer({ pid, shot, pick, onError, onDone }: { pid: string; shot: Shot; pick: Pick; onError: (e: string) => void; onDone: () => void }) {
   const [url, setUrl] = useState<string | null>(null);
@@ -252,6 +339,8 @@ function Trimmer({ pid, shot, pick, onError, onDone }: { pid: string; shot: Shot
   // the clip's shape once it loads: the framing slider only matters when the clip is cropped to fit
   const [shape, setShape] = useState<{ w: number; h: number } | null>(null);
   const cropsSideways = !shape || shape.w / shape.h > box.w / box.h + 0.01;
+  // a browsed clip can be any shape: say so before rendering rather than after
+  const misfit = shape && shot.frame !== "tall" && shape.w <= shape.h ? `This shot needs ${needsText(shot)}; this clip is vertical.` : null;
   const [saving, setSaving] = useState(false);
   const video = useRef<HTMLVideoElement>(null);
   const len = shot.dur;
@@ -334,7 +423,7 @@ function Trimmer({ pid, shot, pick, onError, onDone }: { pid: string; shot: Shot
             style={{ objectPosition: `${frame * 100}% 50%` }}
           />
         ) : (
-          <div className="grid h-full w-full place-items-center px-6 text-center text-[12px] text-ink-400">Preparing a preview of this clip…</div>
+          <div className="grid h-full w-full place-items-center px-6 text-center text-[12px] text-ink-400">Preparing a preview of this clip… a long 4K clip takes a minute the first time.</div>
         )}
       </div>
       <p className="mt-1.5 text-center text-[11px] text-ink-500">Looping the {secs(len)} that will fill the shot, framed as it will look.</p>
@@ -386,8 +475,9 @@ function Trimmer({ pid, shot, pick, onError, onDone }: { pid: string; shot: Shot
       </label>
 
       <div className="mt-5 flex items-center justify-end gap-3">
-        {saving && <span className="text-[12px] text-ink-400">{shot.part === "b-roll" ? "Grading the clip… about 5–15 s" : "Rendering the shot… 15–40 s"}</span>}
-        <button onClick={save} disabled={saving || !dur || dur < len} className="rounded-lg bg-gold px-4 py-2 text-[13px] font-semibold text-ink-950 hover:brightness-110 disabled:opacity-40">
+        {saving && <span className="text-[12px] text-ink-400">{shot.part === "b-roll" ? "Grading the clip… about 5–15 s" : "Rendering the shot… 15–60 s"}</span>}
+        {misfit && <span className="text-[12px] text-red-300">{misfit}</span>}
+        <button onClick={save} disabled={saving || !dur || dur < len || !!misfit} className="rounded-lg bg-gold px-4 py-2 text-[13px] font-semibold text-ink-950 hover:brightness-110 disabled:opacity-40">
           {saving ? "Saving…" : "Use this part"}
         </button>
       </div>

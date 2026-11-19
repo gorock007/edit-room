@@ -11,7 +11,7 @@ import { KEYS, applyOption, hasOption } from "./options.ts";
 import { OWNER, can, type Person } from "./people.ts";
 import { changedSince, loadComments, newId, restore, saveComments, snapshot, updateComment, type Author, type Comment, type Target, type Tier } from "./store.ts";
 import { TIER_NAMES } from "./router.ts";
-import { ShotError, applySwap, listShots, logSwap, renderMontage, shotMode, swapBroll, type SwapReq } from "./shots.ts";
+import { ShotError, allowedClip, applySwap, keepLocal, listShots, logSwap, renderMontage, shotMode, swapBroll, type SwapReq } from "./shots.ts";
 import { info, nameVersion, record, restoreFiles, same, syncOutside, versions, type Version } from "./versions.ts";
 
 /**
@@ -365,7 +365,16 @@ export function makeRoom(e: Emitters) {
         try {
           if (broll) r = await swapBroll(p, i, b);
           else {
-            r = applySwap(p, i, b);
+            // a clip from outside the video folder (a camera card, Downloads): copy just the chosen part in first
+            const shot = listShots(p).shots.find((x) => x.i === i);
+            const orig = allowedClip(p, b.file);
+            let from: { name: string; src: number } | undefined;
+            if (shot) {
+              const kept = await keepLocal(p, orig, Number(b.src), shot.dur);
+              if (kept.file !== b.file && !orig.startsWith(VIDEO_ROOT + path.sep)) from = { name: path.basename(orig), src: Number(b.src) };
+              b = { ...b, file: kept.file, src: kept.src };
+            }
+            r = applySwap(p, i, b, from);
             await renderMontage(p);
           }
         } catch (err: any) {
@@ -377,11 +386,12 @@ export function makeRoom(e: Emitters) {
         const shot = listShots(p).shots.find((s) => s.i === i);
         const n = shot?.n ?? i + 1;
         const name = path.basename(r.after.file);
+        const what = "label" in r && r.label ? r.label : `${name} at ${r.after.src.toFixed(1)} s`;
         const c: Comment = {
           id: cid,
           project: p.id,
           createdAt: Date.now(),
-          text: broll ? `Swapped b-roll ${n} for ${name} at ${r.after.src.toFixed(1)} s` : `Swapped shot ${n} for ${name} at ${r.after.src.toFixed(1)} s`,
+          text: broll ? `Swapped b-roll ${n} for ${what}` : `Swapped shot ${n} for ${what}`,
           t: shot?.start ?? 0,
           x: null,
           y: null,
@@ -390,7 +400,7 @@ export function makeRoom(e: Emitters) {
           activity: [{ at: Date.now(), kind: "info", text: `${who.name} swapped it directly (was ${r.before.file ? path.basename(r.before.file) : "?"} at ${r.before.src ?? "?"} s)` }],
           reply: broll
             ? `B-roll ${n} is now ${name} from ${r.after.src.toFixed(2)} s, graded like the rest of the edit. It keeps its place and length, so nothing else moved.`
-            : `Shot ${n} is now ${name} from ${r.after.src.toFixed(2)} s. Only that shot was re-rendered; the beat timing is unchanged.`,
+            : `Shot ${n} is now ${what}.${"label" in r && r.label && !r.label.startsWith(name) ? " That part was copied into the edit's shots folder, so it still works after the card is ejected." : ""} Only that shot was re-rendered; the beat timing is unchanged.`,
           changed,
           finishedAt: Date.now(),
           want: 1,
