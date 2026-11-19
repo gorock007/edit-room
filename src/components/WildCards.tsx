@@ -192,14 +192,16 @@ function Md({ text, onSeek }: { text: string; onSeek: (t: number) => void }) {
 
 // ---- the view ----
 
-export function WildCards({ narrow, tick, owner, onClose, onError, onUse }: {
+export function WildCards({ narrow, tick, owner, onClose, onError, onUse, onMake }: {
   narrow: boolean;
   tick: number;
   owner: boolean;
   onClose: () => void;
   onError: (e: string) => void;
-  /** start a new edit in this template */
+  /** open New edit with this template picked, to change things before building */
   onUse: (slug: string) => void;
+  /** build a new edit in this card's template from the user's b-roll, right away */
+  onMake: (cardId: string) => Promise<void>;
 }) {
   const [list, setList] = useState<WildList | null>(null);
   const [filter, setFilter] = useState<Filter>("new");
@@ -366,7 +368,7 @@ export function WildCards({ narrow, tick, owner, onClose, onError, onUse }: {
           {d.summary?.seen_before && <p className="mt-2 text-[11px] text-ink-500">Studied before: {d.summary.seen_before}</p>}
 
           {d.state === "ready" && (
-            <Actions d={d} running={running} owner={owner} live={!!d.template && !!list?.templates.includes(d.template)} onUse={onUse} onDecide={decide} onError={onError} onDone={load} />
+            <Actions d={d} running={running} owner={owner} live={!!d.template && !!list?.templates.includes(d.template)} onUse={onUse} onMake={onMake} onDecide={decide} onError={onError} onDone={load} />
           )}
 
           {job && job.status !== "done" && (
@@ -410,7 +412,7 @@ export function WildCards({ narrow, tick, owner, onClose, onError, onUse }: {
                     <p className="mb-2 text-[11px] text-ink-500">
                       Saved as <code className="font-mono text-ink-300">Video Editor/templates/{d.template}</code>.{" "}
                       {d.template && list?.templates.includes(d.template) ? (
-                        <button onClick={() => onUse(d.template!)} className="text-gold underline-offset-2 hover:underline">Make one like this →</button>
+                        <button onClick={() => onUse(d.template!)} className="text-gold underline-offset-2 hover:underline">Use it in a new edit →</button>
                       ) : (
                         "It has been deleted."
                       )}
@@ -471,18 +473,20 @@ function Numbers({ d }: { d: WildDetail }) {
   );
 }
 
-function Actions({ d, running, owner, live, onUse, onDecide, onError, onDone }: {
+function Actions({ d, running, owner, live, onUse, onMake, onDecide, onError, onDone }: {
   d: WildDetail;
   running: boolean;
   owner: boolean;
   live: boolean;
   onUse: (slug: string) => void;
+  onMake: (cardId: string) => Promise<void>;
   onDecide: (s: "new" | "reference" | "dismissed") => void;
   onError: (e: string) => void;
   onDone: () => void;
 }) {
   const [making, setMaking] = useState(false);
   const [exact, setExact] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [name, setName] = useState("");
   const [note, setNote] = useState("");
   const btn = "rounded-md px-2.5 py-1.5 text-[12px] ring-1 ring-white/10 hover:bg-white/5 disabled:opacity-40";
@@ -490,9 +494,22 @@ function Actions({ d, running, owner, live, onUse, onDecide, onError, onDone }: 
     <div className="mt-3">
       <div className="flex flex-wrap gap-2">
         {d.template && live ? (
-          <button onClick={() => onUse(d.template!)} className={cx(btn, "bg-gold text-ink-950 ring-0 hover:bg-gold/90 font-medium")} title={`New edit in the "${d.template}" template`}>
-            Make one like this
-          </button>
+          <>
+            <button
+              onClick={() => {
+                setStarting(true);
+                onMake(d.id).catch((e) => (onError(e.message), setStarting(false)));
+              }}
+              disabled={starting}
+              className={cx(btn, "bg-gold text-ink-950 ring-0 hover:bg-gold/90 font-medium")}
+              title="Builds a new edit in this template from your b-roll folders, with its music and words. Nothing to fill in."
+            >
+              {starting ? "Starting…" : "Make one like this"}
+            </button>
+            <button onClick={() => onUse(d.template!)} className={btn} title="Open New edit with this template picked, to change the music, words or footage first">
+              Customise…
+            </button>
+          </>
         ) : !owner ? null : d.template ? (
           <span className="rounded-md bg-cut/10 px-2.5 py-1.5 text-[12px] text-cut">Template: {d.template} (deleted)</span>
         ) : (

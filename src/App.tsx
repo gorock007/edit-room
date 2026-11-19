@@ -647,6 +647,12 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
             setPid(NEW);
             closeWild();
           }}
+          onMake={async (cardId) => {
+            const { id } = await api.wildMake(cardId);
+            setProjects(await api.projects());
+            setPid(id);
+            closeWild();
+          }}
         />
       ) : (
       <div className={cx("flex min-h-0 flex-1", narrow && "flex-col overflow-y-auto")}>

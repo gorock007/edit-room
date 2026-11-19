@@ -164,12 +164,29 @@ with no voice it carries the video at the template's level.${track.source ? ` It
 (${track.source.link ?? track.source.handle}): fine for timing and preview; in your final reply remind the user to post
 without it and add the same sound in the app.` : ""}`
         : `Music: none picked: voice only, the house default.${tpl ? " If the template's Sound section needs a bed, cut to its tempo and say that a track is missing." : ""}`;
-  return `The user uploaded raw footage for a NEW edit from Edit Room and pressed the button. They expect to come back to a
+  const lib = !raw.files.length && raw.fromLibrary ? raw.fromLibrary : null;
+  const shapes = lib ? Object.entries(lib).filter(([k]) => k !== "clips").map(([k, v]) => `${k}: ${v}`).join(", ") : "";
+  const footage = lib
+    ? `Footage: nothing was uploaded. The user pressed "Make one like this" on a wild card (likely from their phone) to
+get this template's video made from their OWN clips, with no questions. Take every shot from their footage folders
+(listed below). First run \`python3 -I ${path.join(SKILL_DIR, "scripts/broll_index.py")} ${folders.map((f) => `"${f}"`).join(" ")}\`:
+it gives each clip's shape (landscape / portrait / square) and length, cached in ${path.join(VIDEO_ROOT, ".broll-index.json")}.
+The template needs these clip shapes: ${shapes}${lib.clips ? `, ${lib.clips} clips in all` : ""}. Use only clips of the right
+shape for each part: a landscape clip fills a landscape strip or frame, a portrait clip a full 9:16 frame; never
+stretch, pillarbox or squeeze the wrong shape in. Then look at the candidates (catalog_resources.py contact sheets) and
+pick by story and look: the best moment of each clip, never the same moment twice, people and places over screens.
+Skip finished edits and renders (e.g. anything in a "stage test" folder or named like an edit/version) and plain
+screen recordings unless the template asks for them. If one shape runs short, use different moments of the same clips
+before ever using the wrong shape, and say what was short. There is no talking head: skip the take and cut steps
+(skill §1-2) that need a recording; the music and the template carry it.
+`
+    : `Footage (in ${rawDir(p)}):
+${raw.files.map((f) => `- ${f.name} (${gb(f.size)})`).join("\n")}
+`;
+  return `The user ${lib ? "asked" : "uploaded raw footage"} for a NEW edit from Edit Room and pressed the button. They expect to come back to a
 finished edit without being asked anything in between.
 
-Footage (in ${rawDir(p)}):
-${raw.files.map((f) => `- ${f.name} (${gb(f.size)})`).join("\n")}
-
+${footage}
 Format: ${raw.format ?? "9:16"} (the user chose it; deliver only this format).
 
 ${look}

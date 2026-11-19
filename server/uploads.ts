@@ -130,7 +130,20 @@ type PendingRow = FileRow & { received: number; dest?: Dest };
 /** What the build was asked for besides the footage: the format the user picked and library folders to draw from. */
 /** style: a wild card template's folder name in Video Editor/templates, or null for the house style. */
 /** music: null for none (the house default, voice only), "auto" for Claude to pick, or a track's path in the bank. */
-export type BuildOptions = { format: Format | null; folders: string[]; style: string | null; music: string | null };
+/** fromLibrary: a one-tap template build with no upload: the clip shape each part needs ({opener: "portrait", ...}). */
+export type BuildOptions = { format: Format | null; folders: string[]; style: string | null; music: string | null; fromLibrary?: Record<string, string> | null };
+const SHAPES = new Set(["portrait", "landscape", "square", "any"]);
+export const cleanFootage = (o: unknown): Record<string, string> | null => {
+  if (!o || typeof o !== "object") return null;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(o as Record<string, unknown>)) {
+    if (!/^[a-z_]{1,20}$/.test(k)) continue;
+    if (typeof v === "string" && SHAPES.has(v)) out[k] = v;
+    else if (k === "clips" && Array.isArray(v) && v.every((n) => Number.isInteger(n) && n > 0 && n < 200)) out[k] = v.slice(0, 2).join("-");
+    else if (k === "clips" && typeof v === "string" && /^\d{1,3}(-\d{1,3})?$/.test(v)) out[k] = v;
+  }
+  return Object.keys(out).length ? out : null;
+};
 export type RawInfo = { files: FileRow[]; pending: PendingRow[]; note: string; resources: FileRow[] } & BuildOptions;
 
 const list = (dir: string, dest: Dest): FileRow[] =>
@@ -147,6 +160,7 @@ export function buildOptions(p: Project): BuildOptions {
       folders: Array.isArray(o.folders) ? o.folders.filter((x: unknown) => typeof x === "string") : [],
       style: typeof o.style === "string" && /^[a-z0-9-]{1,60}$/.test(o.style) ? o.style : null,
       music: typeof o.music === "string" && o.music.length <= 400 ? o.music : null,
+      fromLibrary: cleanFootage(o.fromLibrary),
     };
   } catch {
     return { format: null, folders: [], style: null, music: null };

@@ -39,6 +39,7 @@ export const api = {
   wildcard: (id: string) => fetch(`/api/wildcards/${encodeURIComponent(id)}`).then(j<WildDetail>),
   wildDecision: (id: string, state: "new" | "reference" | "dismissed") => postJson(`/api/wildcards/${encodeURIComponent(id)}/decision`, { state }).then(j),
   wildPlan: (id: string, idea: number, note: string) => postJson(`/api/wildcards/${encodeURIComponent(id)}/plan`, { idea, note }).then(j),
+  wildMake: (id: string) => postJson(`/api/wildcards/${encodeURIComponent(id)}/make`, {}).then(j<{ id: string }>),
   wildTemplate: (id: string, name: string, note: string, exact = false) => postJson(`/api/wildcards/${encodeURIComponent(id)}/template`, { name, note, exact }).then(j),
   wildStop: (id: string) => postJson(`/api/wildcards/${encodeURIComponent(id)}/stop`, {}).then(j),
   me: () => fetch("/api/me").then(j<Me>),

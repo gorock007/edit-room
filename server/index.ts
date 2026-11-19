@@ -23,7 +23,7 @@ import { versionProject } from "./versions.ts";
 import { readUsage } from "./usage.ts";
 import { checksState, scheduleChecks, setOk } from "./checks.ts";
 import { MUSIC_DIR, listMusic, musicFile } from "./music.ts";
-import { WILD_ROOT, WildError, folderOf, listTemplates, templateOf, listWild, recoverWildJobs, setDecision, startPlan, startTemplate, stopWildJob, wildDetail, wildFile, type Decision } from "./wildcards.ts";
+import { autoTemplates, templateKit, WILD_ROOT, WildError, folderOf, listTemplates, templateOf, listWild, recoverWildJobs, setDecision, startPlan, startTemplate, stopWildJob, wildDetail, wildFile, type Decision } from "./wildcards.ts";
 import { DRIVER, GSAP_CDN_SRC, LOCAL_GSAP, OVERLAY_CSP, localGsapUrl, stillSeek } from "./overlay.ts";
 
 const app = express();
@@ -403,25 +403,32 @@ app.post("/api/projects/:id/build", need("editor"), withProject((p, req, res) =>
   if (music && music !== "auto" && !musicFile(music)) return res.status(400).json({ error: "that track isn't in the music folder any more" });
   saveNote(p, note);
   saveBuildOptions(p, { format, folders, style, music });
+  const text = `Build the first edit in ${format}${tpl ? `, in the "${tpl.title}" template` : ""}${music === "auto" ? ", music picked by Claude" : music ? `, music "${trackName(music)}"` : ""}.${raw.resources.length ? ` ${raw.resources.length} extra file${raw.resources.length > 1 ? "s" : ""} to use.` : ""}${note ? ` ${note}` : ""}`;
+  res.json(queueBuild(p, me(req), text, raw.files.map((f) => f.name).join(", ")));
+}));
+
+const trackName = (m: string) => path.basename(m).replace(/\.[^.]+$/, "");
+/** The first-edit job: a "build" comment the agent queue picks up (its prompt is firstEditPrompt). */
+function queueBuild(p: Project, who: Person, text: string, detail: string): Comment {
   const c: Comment = {
     id: newId(),
     project: p.id,
     createdAt: Date.now(),
-    text: `Build the first edit in ${format}${tpl ? `, in the "${tpl.title}" template` : ""}${music === "auto" ? ", music picked by Claude" : music ? `, music "${path.basename(music).replace(/\.[^.]+$/, "")}"` : ""}.${raw.resources.length ? ` ${raw.resources.length} extra file${raw.resources.length > 1 ? "s" : ""} to use.` : ""}${note ? ` ${note}` : ""}`,
+    text,
     t: 0,
     x: null,
     y: null,
-    target: { kind: "build", label: BUILD_LABEL, detail: raw.files.map((f) => f.name).join(", ") },
+    target: { kind: "build", label: BUILD_LABEL, detail },
     status: "queued",
     activity: [],
     want: 1,
-    author: authorOf(me(req)),
+    author: authorOf(who),
   };
   saveComments(p, [...loadComments(p), c]);
   emitComment(c);
   enqueue(p, c.id, hooks);
-  res.json(c);
-}));
+  return c;
+}
 
 app.get("/api/projects/:id/model", withProject((p, _req, res) => {
   openProject(p);
@@ -607,7 +614,10 @@ const wild = (fn: (req: express.Request, res: express.Response) => unknown) => a
     res.status(e instanceof WildError ? e.status : 500).json({ error: String(e?.message ?? e) });
   }
 };
-const wildChanged = () => send({ type: "wildcards", at: Date.now() });
+const wildChanged = () => {
+  send({ type: "wildcards", at: Date.now() });
+  autoTemplates(wildChanged); // a shared reel whose breakdown just landed gets its template
+};
 let wildSoon: NodeJS.Timeout | null = null;
 fs.mkdirSync(WILD_ROOT, { recursive: true });
 chokidar
@@ -617,6 +627,7 @@ chokidar
     wildSoon = setTimeout(wildChanged, 800);
   });
 recoverWildJobs();
+autoTemplates(wildChanged);
 const DECISIONS = new Set<Decision>(["new", "reference", "dismissed"]);
 app.get("/api/wildcards", need("editor"), wildOk, wild((_req, res) => res.json(listWild())));
 app.get("/api/wildcards/:id", need("editor"), wildOk, wild((req, res) => res.json(wildDetail(String(req.params.id)))));
@@ -639,6 +650,27 @@ app.post("/api/wildcards/:id/stop", need("owner"), wild((req, res) => {
   res.json({ ok: true });
 }));
 app.get("/api/templates", need("editor"), (_req, res) => res.json(listTemplates()));
+// "Make one like this": a new edit in the card's template, made from the user's b-roll folders, nothing to fill in
+app.post("/api/wildcards/:id/make", need("editor"), wildOk, wild((req, res) => {
+  if (!runsDirectly(me(req))) throw new WildError(403, "Only people with access to every project can start a new edit.");
+  const kit = templateKit(String(req.params.id));
+  const folders = libraryFolders().map((f) => f.name);
+  if (!folders.length) throw new WildError(400, "There are no footage folders in Video Editor to take clips from.");
+  const { id } = newEditFolder();
+  const p = getProject(id);
+  if (!p) throw new WildError(500, "The new edit folder didn't show up.");
+  const note = kit.line ? `On screen: "${kit.line}".` : "";
+  saveNote(p, note);
+  saveBuildOptions(p, { format: kit.format, folders, style: kit.slug, music: kit.track, fromLibrary: kit.footage });
+  const shapes = Object.entries(kit.footage).filter(([k]) => k !== "clips").map(([k, v]) => `${v} ${k}`).join(", ");
+  queueBuild(
+    p,
+    me(req),
+    `Make one like the "${kit.title}" template in ${kit.format}, from your b-roll folders (${shapes})${kit.track ? `, music "${trackName(kit.track)}"` : ""}.${note ? ` ${note}` : ""}`,
+    `b-roll: ${folders.join(", ")}`,
+  );
+  res.json({ id });
+}));
 
 // ---- the music bank (background music/, measured into catalog.json) ----
 const musicChanged = () => send({ type: "music", at: Date.now() });

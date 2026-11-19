@@ -200,7 +200,8 @@ export function listTemplates(): TemplateInfo[] {
           const tok = JSON.parse(fs.readFileSync(path.join(TEMPLATES_DIR, e.name, "tokens.json"), "utf8"));
           track = typeof tok?.sound?.track === "string" && musicFile(tok.sound.track) ? tok.sound.track : null;
           // the line a template puts on screen by default (prefills New edit's note)
-          onScreen = typeof tok?.notice?.text === "string" ? tok.notice.text.slice(0, 120) : null;
+          const words = tok?.on_screen?.text ?? tok?.notice?.text;
+          onScreen = typeof words === "string" && words.trim() ? words.trim().slice(0, 120) : null;
         } catch {}
         return { slug: e.name, title, from: line("based on"), needs: line("needs"), useWhen: line("use when"), track, line: onScreen };
       });
@@ -361,7 +362,10 @@ export function startTemplate(id: string, name: unknown, note: unknown, onChange
       ? `The reel's music is saved in the user's music bank as "${saved}" (background music/catalog.json has its BPM, beat times and hits): make it the template's default track (tokens.json "sound": {"track": "${saved}"}) and state pace in beats of it.`
       : "",
     `Also write ${tdir}/tokens.json: {"canvas", "pace": {"avg_shot_s", "changes_per_s", "wpm"}, "colours": {name: hex}, "fonts": {...},`,
-    '"captions": {"y", "size_px", "words_per_line", "case", "highlight"}, "sound": {"music_bed", "sfx", "lufs"}}.',
+    '"captions": {"y", "size_px", "words_per_line", "case", "highlight"}, "sound": {"music_bed", "sfx", "lufs"},',
+    '"on_screen": {"text": "<the fixed words the reel puts on screen, if it has any>"},',
+    '"footage": {"opener": "portrait|landscape|square|any", "montage": "portrait|landscape|square|any", "closing": "...", "clips": [min, max]}}.',
+    'footage = the SHAPE of the user\'s own clips each part needs, judged by the picture area it fills (a full-frame 9:16 shot needs a portrait clip; a 3:2 letterboxed strip or a 16:9 frame needs landscape clips). A one-tap build picks the user\'s b-roll by it.',
     `List the 4-6 frames that show the look best in ${tdir}/refs.txt, one file name from frames/ per line (Edit Room copies them).`,
     "Do NOT add anything to CLAUDE.md or any other file: a template is opt-in, chosen per edit, and the house style stays the default.",
     n ? `The user's note: ${n}` : "",
@@ -372,6 +376,64 @@ export function startTemplate(id: string, name: unknown, note: unknown, onChange
     .join("\n");
   const rule = "//" + tdir.replace(/^\//, "") + "/**";
   startJob(id, { kind: "template", status: "running", started: Date.now(), slug }, prompt, [`Write(${rule})`, `Edit(${rule})`], onChange);
+}
+
+/**
+ * Reels shared from the phone get a template straight away (the user: "if I'm sending it, I want a template"):
+ * the inbox watcher marks them with shared.json; once the breakdown is ready, an exact-copy template is made. One
+ * job at a time; a failed auto template is not retried by itself (Make template is still there).
+ */
+export function autoTemplates(onChange: () => void) {
+  if (running.size) return;
+  let ids: string[] = [];
+  try {
+    ids = fs.readdirSync(WILD_ROOT).filter((n) => ID_RE.test(n));
+  } catch {
+    return;
+  }
+  for (const id of ids) {
+    const dir = path.join(WILD_ROOT, id);
+    const shared = readJson<{ auto_template?: boolean }>(path.join(dir, "shared.json"));
+    if (!shared?.auto_template) continue;
+    const c = card(id);
+    if (c.state !== "ready" || c.template || fs.existsSync(path.join(dir, "template.json"))) continue;
+    if (c.job?.kind === "template") continue; // tried already (done, failed or cut off)
+    try {
+      startTemplate(id, null, null, onChange, true);
+      console.log(`wild cards: auto template for ${id}`);
+    } catch (e: any) {
+      console.error(`wild cards: auto template for ${id} failed to start: ${e?.message ?? e}`);
+    }
+    return;
+  }
+}
+
+export type TemplateKit = { slug: string; title: string; format: "9:16" | "16:9"; track: string | null; line: string | null; footage: Record<string, string> };
+/**
+ * What "Make one like this" needs to build a wild card's template with no questions: its format, default track,
+ * on-screen words and the clip shape each part takes (tokens.json "footage"; else guessed from the canvas).
+ */
+export function templateKit(id: string): TemplateKit {
+  folderOf(id);
+  const c = card(id);
+  if (!c.template) throw new WildError(409, "This wild card has no template yet.");
+  const t = templateOf(c.template);
+  if (!t) throw new WildError(409, "Its template has been deleted.");
+  const tok = readJson<any>(path.join(TEMPLATES_DIR, t.slug, "tokens.json")) ?? {};
+  const format = tok?.canvas?.format === "16:9" ? "16:9" : "9:16";
+  const shapes = new Set(["portrait", "landscape", "square", "any"]);
+  const footage: Record<string, string> = {};
+  for (const [k, v] of Object.entries(tok?.footage ?? {})) {
+    if (typeof v === "string" && shapes.has(v)) footage[k] = v;
+    else if (k === "clips" && Array.isArray(v)) footage.clips = v.slice(0, 2).join("-");
+  }
+  if (!footage.montage) {
+    // a letterboxed strip wider than tall takes landscape clips; otherwise the frame's own shape
+    const aspect = String(tok?.canvas?.strip?.aspect ?? "");
+    const [aw, ah] = aspect.split(":").map(Number);
+    footage.montage = aw && ah ? (aw > ah ? "landscape" : "portrait") : format === "16:9" ? "landscape" : "portrait";
+  }
+  return { slug: t.slug, title: t.title, format, track: t.track, line: t.line, footage };
 }
 
 /** The template an edit was built with (its build.json), for the build prompt and every later comment. */

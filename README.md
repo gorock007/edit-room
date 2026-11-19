@@ -61,7 +61,10 @@ npm run dev        # server on :4310 + app on http://127.0.0.1:5310 (also keeps 
   what's new to build) or **Make template** (Claude writes the look as rules into `Video Editor/templates/<name>/`:
   `style.md` under one page with a "never do" list, `tokens.json`, reference frames; tick **Copy the look exactly** to
   keep the original's colours, logo and font instead of adapting them). Templates are opt-in and never
-  touch CLAUDE.md, so the house style stays the default. To use one, press **Make one like this** on its card, or pick
+  touch CLAUDE.md, so the house style stays the default. Reels shared from the phone get an exact-copy template made
+  automatically once their breakdown lands. **Make one like this** on a card then builds the video in one tap from
+  your own b-roll folders (clips of the shape each part needs, from the skill's `broll_index.py`), with the template's
+  music and words; **Customise…** opens New edit with it picked instead. Or pick
   it under **Style** in New edit (House is always the default): the build reads its rules first, they win over the
   house look where they differ, and later comments on that edit keep to it. A shared reel's music is saved into the
   music bank (`background music/from reels/`, voice split off with demucs when someone talks over it) and becomes its

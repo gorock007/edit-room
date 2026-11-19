@@ -230,7 +230,9 @@ export function NewEdit({ projectId, preset, comments, narrow, onCreated, onErro
     <div className={cx("mx-auto w-full max-w-xl px-4", narrow ? "py-5" : "py-10")}>
       <h1 className="text-[18px] font-semibold tracking-tight">New edit</h1>
       <p className="mt-1 text-[13px] leading-relaxed text-ink-400">
-        Add the raw recording straight from the camera or your phone. No need to trim it: Claude picks the best takes and cuts the rest.
+        {build && !hasRaw && raw?.fromLibrary
+          ? `Made from your own b-roll (${raw.folders.join(", ")}), in the ${templates.find((t) => t.slug === raw.style)?.title ?? raw.style ?? ""} template. Nothing to upload.`
+          : "Add the raw recording straight from the camera or your phone. No need to trim it: Claude picks the best takes and cuts the rest."}
       </p>
 
       {!build && (
