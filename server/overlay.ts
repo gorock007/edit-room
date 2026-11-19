@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { getProject, type Project } from "./projects.ts";
-import { PORT } from "./config.ts";
+import { PORT, SKILL_DIR } from "./config.ts";
 
 /** The caption composition gets this tiny time driver injected, so the app (and a still) can seek it frame-exactly. */
 export const DRIVER = `<script>
@@ -26,16 +26,21 @@ const CHROME = [
   "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
 ].find((f) => fs.existsSync(f));
 
-/** The one outside script older caption compositions load (build_captions.py's template), pinned to its version. */
-const GSAP_CDN = "https://cdn.jsdelivr.net/npm/gsap@3.14.2/";
+/**
+ * Older caption compositions (build_captions.py's template) load gsap from a CDN. The overlay route serves the skill's
+ * own copy of the same version instead, so a composition never needs an outside host.
+ */
+export const GSAP_CDN_SRC = "https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js";
+export const LOCAL_GSAP = path.join(SKILL_DIR, "assets/stage-template/assets/js/gsap.min.js");
+export const localGsapUrl = (id: string) => `/overlay/${encodeURIComponent(id)}/__room/gsap.min.js`;
 /**
  * Sent with every caption composition. The page is written by the skill's builders and by Claude, and runs on this
- * server's own origin (in the player's iframe and in a still), so it may load only its own files and the pinned gsap,
- * and may not call anything: no fetch/XHR/WebSocket to the API, no forms, no frames, no plugins.
+ * server's own origin (in the player's iframe and in a still), so it may load only its own files and may not call
+ * anything: no fetch/XHR/WebSocket to the API, no forms, no frames, no plugins.
  */
 export const OVERLAY_CSP = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline' ${GSAP_CDN}`,
+  "script-src 'self' 'unsafe-inline'",
   "style-src 'self' 'unsafe-inline'",
   "font-src 'self' data:",
   "img-src 'self' data: blob:",
@@ -67,8 +72,11 @@ export async function overlayStill(p: Project, t: number, w: number, h: number, 
     await new Promise<void>((resolve, reject) => {
       const ch = spawn(CHROME, [
         "--headless=new", "--hide-scrollbars", "--force-device-scale-factor=1", `--user-data-dir=${profile}`, "--no-first-run",
-        // nothing leaves this Mac except the pinned gsap: every request goes to a dead proxy but these two
-        "--disable-gpu", "--disable-extensions", "--proxy-server=http://127.0.0.1:9", `--proxy-bypass-list=127.0.0.1:${PORT};cdn.jsdelivr.net`,
+        // nothing leaves this Mac: no name resolves but 127.0.0.1, every request but this server's goes to a dead proxy,
+        // and WebRTC may not open its own connections
+        "--disable-gpu", "--disable-extensions", "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
+        "--proxy-server=http://127.0.0.1:9", `--proxy-bypass-list=127.0.0.1:${PORT}`,
+        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--webrtc-ip-handling-policy=disable_non_proxied_udp",
         `--window-size=${w},${h}`, "--virtual-time-budget=4000", "--default-background-color=00000000", `--screenshot=${out}`, url,
       ], { stdio: "ignore" });
       const timer = setTimeout(() => ch.kill("SIGKILL"), 30_000);

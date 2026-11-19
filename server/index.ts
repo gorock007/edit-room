@@ -22,7 +22,7 @@ import { mcpHandler } from "./mcp.ts";
 import { versionProject } from "./versions.ts";
 import { readUsage } from "./usage.ts";
 import { checksState, scheduleChecks, setOk } from "./checks.ts";
-import { DRIVER, OVERLAY_CSP, stillSeek } from "./overlay.ts";
+import { DRIVER, GSAP_CDN_SRC, LOCAL_GSAP, OVERLAY_CSP, localGsapUrl, stillSeek } from "./overlay.ts";
 
 const app = express();
 app.set("case sensitive routing", true); // "/API/..." must not reach a route the login gate didn't recognise
@@ -558,6 +558,7 @@ app.get("/media/:id/file", withProject((p, req, res) => {
 // The caption composition, with the time driver injected (overlay.ts) so the app can seek it frame-exactly.
 app.get("/overlay/:id/{*rest}", withProject((p, req, res) => {
   let rest = ([] as string[]).concat((req.params as any).rest ?? []).join("/") || "index.html";
+  if (rest === "__room/gsap.min.js") return res.set("Content-Security-Policy", OVERLAY_CSP).type("js").sendFile(LOCAL_GSAP, { dotfiles: "allow" }); // instead of the CDN (overlay.ts)
   let dir = p.overlaysDir;
   const m = rest.match(/^o\/([a-f0-9]{10})\/([A-D])\/(.*)$/);
   if (m) {
@@ -578,7 +579,7 @@ app.get("/overlay/:id/{*rest}", withProject((p, req, res) => {
   if (!inside(f, [dir, p.overlaysDir ?? dir]) || !fs.existsSync(f)) return res.status(404).end();
   res.set("Content-Security-Policy", OVERLAY_CSP); // the composition's files may not call the API (overlay.ts)
   if (rest === "index.html") {
-    let html = fs.readFileSync(f, "utf8").replace("<head>", "<head>" + DRIVER);
+    let html = fs.readFileSync(f, "utf8").replace("<head>", "<head>" + DRIVER).split(GSAP_CDN_SRC).join(localGsapUrl(p.id));
     // ?still=<seconds>: seek once loaded, for a still of the captions (overlay.ts, headless Chrome)
     const still = Number(req.query.still);
     if (req.query.still != null && Number.isFinite(still) && still >= 0) html = html.replace(/<\/body>/i, stillSeek(still) + "</body>");
