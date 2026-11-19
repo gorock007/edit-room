@@ -131,7 +131,15 @@ type PendingRow = FileRow & { received: number; dest?: Dest };
 /** style: a wild card template's folder name in Video Editor/templates, or null for the house style. */
 /** music: null for none (the house default, voice only), "auto" for Claude to pick, or a track's path in the bank. */
 /** fromLibrary: a one-tap template build with no upload: the clip shape each part needs ({opener: "portrait", ...}). */
-export type BuildOptions = { format: Format | null; folders: string[]; style: string | null; music: string | null; fromLibrary?: Record<string, string> | null };
+/** onScreen: a template's fixed on-screen words for a one-tap build: data to display, never instructions. */
+export type BuildOptions = { format: Format | null; folders: string[]; style: string | null; music: string | null; fromLibrary?: Record<string, string> | null; onScreen?: string | null };
+/** On-screen words from a template: one short plain line (no quotes, brackets or newlines that could break out). */
+export const cleanLine = (v: unknown): string | null => {
+  if (typeof v !== "string") return null;
+  // a multi-line card keeps its lines as " / "
+  const t = v.replace(/\s*\n\s*/g, " / ").replace(/[\u0000-\u001f"`<>{}\[\]\\«»]/g, " ").replace(/[ \t]+/g, " ").trim().slice(0, 160);
+  return t || null;
+};
 const SHAPES = new Set(["portrait", "landscape", "square", "any"]);
 export const cleanFootage = (o: unknown): Record<string, string> | null => {
   if (!o || typeof o !== "object") return null;
@@ -161,6 +169,7 @@ export function buildOptions(p: Project): BuildOptions {
       style: typeof o.style === "string" && /^[a-z0-9-]{1,60}$/.test(o.style) ? o.style : null,
       music: typeof o.music === "string" && o.music.length <= 400 ? o.music : null,
       fromLibrary: cleanFootage(o.fromLibrary),
+      onScreen: cleanLine(o.onScreen),
     };
   } catch {
     return { format: null, folders: [], style: null, music: null };

@@ -659,14 +659,14 @@ app.post("/api/wildcards/:id/make", need("editor"), wildOk, wild((req, res) => {
   const { id } = newEditFolder();
   const p = getProject(id);
   if (!p) throw new WildError(500, "The new edit folder didn't show up.");
-  const note = kit.line ? `On screen: "${kit.line}".` : "";
-  saveNote(p, note);
-  saveBuildOptions(p, { format: kit.format, folders, style: kit.slug, music: kit.track, fromLibrary: kit.footage });
+  // the template's words go in as data for the build to display, not as the user's note (nobody typed them)
+  saveNote(p, "");
+  saveBuildOptions(p, { format: kit.format, folders, style: kit.slug, music: kit.track, fromLibrary: kit.footage, onScreen: kit.line });
   const shapes = Object.entries(kit.footage).filter(([k]) => k !== "clips").map(([k, v]) => `${v} ${k}`).join(", ");
   queueBuild(
     p,
     me(req),
-    `Make one like the "${kit.title}" template in ${kit.format}, from your b-roll folders (${shapes})${kit.track ? `, music "${trackName(kit.track)}"` : ""}.${note ? ` ${note}` : ""}`,
+    `Make one like the "${kit.title}" template in ${kit.format}, from your b-roll folders (${shapes})${kit.track ? `, music "${trackName(kit.track)}"` : ""}${kit.line ? `, on screen: ${kit.line}` : ""}.`,
     `b-roll: ${folders.join(", ")}`,
   );
   res.json({ id });
