@@ -191,7 +191,7 @@ function SwapSheet({ pid, shot, onClose, onError, onDone }: { pid: string; shot:
                 </button>
               ))}
               <div className="flex-1" />
-              <button onClick={() => setTab("browse")} disabled={!!upload} className={cx(tab === "browse" && !upload && "hidden", "rounded-md bg-gold")} >
+              <button onClick={() => setTab("browse")} disabled={!!upload} className={cx("rounded-md bg-gold px-2.5 py-1 text-[12px] font-semibold text-ink-950 hover:brightness-110 disabled:opacity-50", tab === "browse" && !upload && "hidden")}>
                 {upload ? `Uploading ${upload.pct}%` : "Browse…"}
               </button>
               <input ref={file} type="file" accept="video/*" className="hidden" onChange={(e) => (fromPhone(e.target.files?.[0]), (e.target.value = ""))} />
