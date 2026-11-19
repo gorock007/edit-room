@@ -366,6 +366,8 @@ export function startTemplate(id: string, name: unknown, note: unknown, onChange
     '"captions": {"y", "size_px", "words_per_line", "case", "highlight"}, "sound": {"music_bed", "sfx", "lufs"},',
     '"on_screen": {"text": "<the fixed words the reel puts on screen, if it has any>"},',
     '"footage": {"opener": "portrait|landscape|square|any", "montage": "portrait|landscape|square|any", "closing": "...", "clips": [min, max]}}.',
+    '"story": {"line": "<one sentence: what the footage must say for the joke or point to land>", "show": [groups], "never": [groups]}',
+    'with groups from: screens, outdoors, people, food, travel, night, water. Also add a "## Story" section to style.md: what every shot must show and must never show (e.g. a reel about AI doing the work: never a desk, laptop or screen). Builds pick the user\'s clips with on-device labels by it.',
     'footage = the SHAPE of the user\'s own clips each part needs, judged by the picture area it fills (a full-frame 9:16 shot needs a portrait clip; a 3:2 letterboxed strip or a 16:9 frame needs landscape clips). A one-tap build picks the user\'s b-roll by it.',
     `List the 4-6 frames that show the look best in ${tdir}/refs.txt, one file name from frames/ per line (Edit Room copies them).`,
     "Do NOT add anything to CLAUDE.md or any other file: a template is opt-in, chosen per edit, and the house style stays the default.",
@@ -412,6 +414,17 @@ export function autoTemplates(onChange: () => void) {
     }
     return;
   }
+}
+
+const GROUPS = new Set(["screens", "outdoors", "people", "food", "travel", "night", "water"]);
+export type TemplateStory = { line: string | null; show: string[]; never: string[] };
+/** A template's story rule (tokens.json "story"): what the footage must say, as label groups the picker knows. */
+export function templateStory(slug: string | null): TemplateStory | null {
+  if (!slug || !/^[a-z0-9-]{1,80}$/.test(slug)) return null;
+  const st = readJson<any>(path.join(TEMPLATES_DIR, slug, "tokens.json"))?.story;
+  if (!st || typeof st !== "object") return null;
+  const g = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && GROUPS.has(x)) : []);
+  return { line: cleanLine(st.line), show: g(st.show), never: g(st.never) };
 }
 
 export type TemplateKit = { slug: string; title: string; format: "9:16" | "16:9"; track: string | null; line: string | null; footage: Record<string, string> };

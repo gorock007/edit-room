@@ -23,6 +23,7 @@ import { versionProject } from "./versions.ts";
 import { readUsage } from "./usage.ts";
 import { checksState, scheduleChecks, setOk } from "./checks.ts";
 import { MUSIC_DIR, listMusic, musicFile } from "./music.ts";
+import { ShotError, clipFrame, clipPreview, clipsFor, hasShots, listShots, previewFile, shotThumb, suggestions } from "./shots.ts";
 import { autoTemplates, templateKit, WILD_ROOT, WildError, folderOf, listTemplates, templateOf, listWild, recoverWildJobs, setDecision, startPlan, startTemplate, stopWildJob, wildDetail, wildFile, type Decision } from "./wildcards.ts";
 import { DRIVER, GSAP_CDN_SRC, LOCAL_GSAP, OVERLAY_CSP, localGsapUrl, stillSeek } from "./overlay.ts";
 
@@ -361,9 +362,12 @@ app.get("/api/library-folders", need("editor"), (req, res) => {
 });
 
 app.post("/api/projects/:id/uploads", need("editor"), withProject((p, req, res) => {
-  if (p.draftDir) return res.status(400).json({ error: "this edit is already built; start a new edit for new footage" });
+  const dest = req.body?.dest === "resources" ? "resources" : req.body?.dest === "shots" ? "shots" : "raw";
+  // a built edit takes only clips for its shots (picked on the phone in the shot swapper)
+  if (p.draftDir && dest !== "shots") return res.status(400).json({ error: "this edit is already built; start a new edit for new footage" });
+  if (dest === "shots" && (!hasShots(p) || !runsDirectly(me(req)))) return res.status(400).json({ error: "this edit has no shots to swap" });
   try {
-    res.json(startUpload(p, String(req.body?.name ?? ""), Number(req.body?.size), req.body?.dest === "resources" ? "resources" : "raw"));
+    res.json(startUpload(p, String(req.body?.name ?? ""), Number(req.body?.size), dest));
   } catch (e: any) {
     res.status(400).json({ error: String(e?.message ?? e) });
   }
@@ -433,6 +437,65 @@ function queueBuild(p: Project, who: Person, text: string, detail: string): Comm
 app.get("/api/projects/:id/model", withProject((p, _req, res) => {
   openProject(p);
   res.json({ model: readModel(p), proxy: proxyState(p) });
+}));
+
+// ---- shots: swap a montage edit's shots like a CapCut template (server/shots.ts) ----
+const shotOk = (req: express.Request) => runsDirectly(me(req)); // clip lists name the footage folders on this Mac
+const shotN = (req: express.Request) => {
+  const n = Number(req.params.i);
+  if (!Number.isInteger(n) || n < 0 || n > 999) throw new RoomError(400, "no such shot");
+  return n;
+};
+const shotErr = (res: express.Response, e: any) => res.status(e instanceof ShotError || e instanceof RoomError ? e.status : 500).json({ error: String(e?.message ?? e) });
+app.get("/api/projects/:id/shots", need("editor"), withProject((p, _req, res) => res.json(hasShots(p) ? listShots(p) : { shots: [], story: null, style: null, total: 0 })));
+app.get("/media/:id/shot/:i", need("editor"), withProject((p, req, res) => {
+  const f = shotThumb(p, shotN(req));
+  if (!f) return res.status(404).end();
+  res.set("Cache-Control", "private, max-age=31536000, immutable").sendFile(f);
+}));
+app.get("/api/projects/:id/shots/:i/clips", need("editor"), withProject(async (p, req, res) => {
+  if (!shotOk(req)) return res.status(403).json({ error: "Only people with access to every project can browse the footage folders." });
+  try {
+    const s = listShots(p).shots[shotN(req)];
+    if (!s?.needs) return res.status(400).json({ error: "That shot can't be swapped." });
+    res.json({ shot: s, clips: clipsFor(p, s.needs), suggestions: await suggestions(p, s.i) });
+  } catch (e) {
+    shotErr(res, e);
+  }
+}));
+app.get("/media/:id/clip-frame", need("editor"), withProject((p, req, res) => {
+  if (!shotOk(req)) return res.status(403).end();
+  try {
+    const f = clipFrame(p, req.query.f, req.query.t);
+    if (!f) return res.status(404).end();
+    res.set("Cache-Control", "private, max-age=86400").sendFile(f);
+  } catch (e) {
+    shotErr(res, e);
+  }
+}));
+app.get("/api/projects/:id/clip-preview", need("editor"), withProject((p, req, res) => {
+  if (!shotOk(req)) return res.status(403).json({ error: "not allowed" });
+  try {
+    const r = clipPreview(p, req.query.f);
+    res.json({ state: r.state, url: r.file ? `/media/${encodeURIComponent(p.id)}/clip-preview?f=${encodeURIComponent(String(req.query.f))}` : null });
+  } catch (e) {
+    shotErr(res, e);
+  }
+}));
+app.get("/media/:id/clip-preview", need("editor"), withProject((p, req, res) => {
+  if (!shotOk(req)) return res.status(403).end();
+  try {
+    const r = clipPreview(p, req.query.f);
+    const f = r.file ? previewFile(r.file) : null;
+    if (!f) return res.status(404).end();
+    res.sendFile(f);
+  } catch (e) {
+    shotErr(res, e);
+  }
+}));
+app.post("/api/projects/:id/shots/:i", need("editor"), withProject(async (p, req, res) => {
+  if (!shotOk(req)) return res.status(403).json({ error: "Only people with access to every project can swap shots." });
+  res.json(await room.swapShot(p, me(req), shotN(req), req.body ?? {}));
 }));
 
 // ---- export for Reels / TikTok ----

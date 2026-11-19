@@ -16,7 +16,8 @@ import type { Project } from "./projects.ts";
 
 export const VIDEO_EXT = /\.(mp4|mov|m4v|mts|m2ts|mxf|avi|mkv|wav|m4a|mp3|aif|aiff)$/i;
 export const IMAGE_EXT = /\.(png|jpe?g|heic|heif|webp|gif|tiff?)$/i;
-export type Dest = "raw" | "resources";
+/** shots = a clip picked on the phone for one shot of a built montage edit (edit folder's shots/) */
+export type Dest = "raw" | "resources" | "shots";
 export const FORMATS = ["9:16", "16:9"] as const;
 export type Format = (typeof FORMATS)[number];
 export const MAX_FILE = 200 * 1024 ** 3;
@@ -25,7 +26,7 @@ const SPARE = 5 * 1024 ** 3; // never fill the disk: keep this much free after t
 
 export const rawDir = (p: Project) => path.join(p.editDir, "raw");
 export const resourcesDir = (p: Project) => path.join(p.editDir, "resources");
-const destDir = (p: Project, dest: Dest) => (dest === "resources" ? resourcesDir(p) : rawDir(p));
+const destDir = (p: Project, dest: Dest) => (dest === "resources" ? resourcesDir(p) : dest === "shots" ? path.join(p.editDir, "shots") : rawDir(p));
 const partsDir = (p: Project) => path.join(rawDir(p), ".uploads");
 const okFor = (name: string, dest: Dest) => VIDEO_EXT.test(name) || (dest === "resources" && IMAGE_EXT.test(name));
 

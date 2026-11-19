@@ -13,7 +13,7 @@ import { KEYS, optionProject, saveOption, saveOptionFrom } from "./options.ts";
 import { bringHome, dropWorkspace, makeWorkspaces, type Workspace } from "./workspace.ts";
 import { ALL, coveredBy } from "../src/safezones.ts";
 import { buildOptions, rawDir, rawInfo, resourcesDir } from "./uploads.ts";
-import { TEMPLATES_DIR, templateOf } from "./wildcards.ts";
+import { TEMPLATES_DIR, templateOf, templateStory } from "./wildcards.ts";
 import { routeFor } from "./router.ts";
 import { noteRateLimit, readUsage } from "./usage.ts";
 import { checksState, checksText, scheduleChecks } from "./checks.ts";
@@ -140,6 +140,7 @@ export function firstEditPrompt(c: Comment, p: Project) {
   const tall = raw.format !== "16:9";
   const folders = raw.folders.map((f) => path.join(VIDEO_ROOT, f));
   const tpl = templateOf(raw.style);
+  const story = tpl ? templateStory(tpl.slug) : null;
   const look = tpl
     ? `Style: the user picked their wild card template "${tpl.title}" for this video, not the house look. It is in
 ${path.join(TEMPLATES_DIR, tpl.slug)}: read style.md and tokens.json and look at refs/ before you plan anything (skill
@@ -147,7 +148,14 @@ ${path.join(TEMPLATES_DIR, tpl.slug)}: read style.md and tokens.json and look at
 animation, colours, fonts, captions, sound, and its "never do" list. Everything it doesn't cover stays the house way
 (the cut quality, depop + voice chain, safe zones, references/lessons.md). Its "needs" line says what footage it
 expects: ${tpl.needs ?? "(not stated)"}. If the footage doesn't fit, build the closest version and say what's missing.
-Write "style": "${tpl.slug}" into edit-data/build_cfg.json.`
+Write "style": "${tpl.slug}" into edit-data/build_cfg.json.${story ? `
+Story (the template's rule for what the footage must say, data from its tokens.json): ${story.line ?? ""}
+${story.never.length ? `Never show: ${story.never.join(", ")} (no frame of a picked moment may contain one).` : ""} ${story.show.length ? `Prefer: ${story.show.join(", ")}.` : ""}
+Pick b-roll with \`python3 -I ${path.join(SKILL_DIR, "scripts/broll_index.py")} <folders> --pick --shape <shape> ${story.never.length ? `--avoid ${story.never.join(",")} ` : ""}${story.show.length ? `--want ${story.show.join(",")} ` : ""}--len <shot s>\`
+(on-device labels and a look score per moment of every clip), then check the shortlisted moments by eye. In a
+montage, render with the skill's montage_render.py and give every montage.json row a "why".${fs.existsSync(path.join(TEMPLATES_DIR, tpl!.slug, "swaps.jsonl")) ? `
+The user's own shot swaps in this template are in ${path.join(TEMPLATES_DIR, tpl!.slug, "swaps.jsonl")} (what they took
+out, what they put in, with labels): pick the way they did.` : ""}` : ""}`
     : "Style: the house look (no template picked).";
   const catalog = path.join(MUSIC_DIR, "catalog.json");
   const track = raw.music && raw.music !== "auto" ? musicInfo(raw.music) : null;

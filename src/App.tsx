@@ -15,6 +15,7 @@ import { Timeline } from "./components/Timeline";
 import { CommentsPanel, Kbd } from "./components/CommentsPanel";
 import { NewEdit } from "./components/NewEdit";
 import { WildCards } from "./components/WildCards";
+import { ShotsPanel } from "./components/ShotsPanel";
 import { ExportMenu } from "./components/ExportMenu";
 import { SAFE_LABEL, modesFor, type SafeMode } from "./safezones";
 
@@ -77,8 +78,10 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
   const [preset, setPreset] = useState<{ style: string; at: number } | null>(null);
   const [sharing, setSharing] = useState(false);
   const narrow = useNarrow();
-  const [tab, setTab] = useState<"comments" | "words" | "checks" | "timeline" | "history">("comments");
-  const [side, setSide] = useState<"comments" | "words" | "checks" | "history">("comments");
+  const [tab, setTab] = useState<"comments" | "words" | "checks" | "shots" | "timeline" | "history">("comments");
+  const [side, setSide] = useState<"comments" | "words" | "checks" | "shots" | "history">("comments");
+  // montage edits (wild card templates) have a shot list that can be swapped like a CapCut template
+  const [hasShots, setHasShots] = useState(false);
   // version history, and the version being compared side by side with the current edit
   const [history, setHistory] = useState<{ versions: VersionInfo[]; current: number | null }>({ versions: [], current: null });
   const [compareVer, setCompareVer] = useState<number | null>(null);
@@ -272,6 +275,17 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
       .then((l) => setWildNew(l.cards.filter((c) => c.decision === "new" && c.state === "ready").length))
       .catch(() => {});
   }, [startsEdits, wildTick]);
+  useEffect(() => {
+    if (!pid || pid === NEW || !editor) return setHasShots(false);
+    api
+      .shots(pid)
+      .then((l) => setHasShots(l.shots.length > 0))
+      .catch(() => setHasShots(false));
+  }, [pid, editor, info?.hasDraft]);
+  useEffect(() => {
+    if (!hasShots && side === "shots") setSide("comments");
+    if (!hasShots && tab === "shots") setTab("comments");
+  }, [hasShots]);
   const closeWild = useCallback(() => {
     setWild(false);
     window.history.replaceState(null, "", location.pathname + location.search);
@@ -486,7 +500,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
   // the Comments / History switch at the top of the side panel
   const sideHeader = (
     <div className="flex rounded-lg bg-ink-950 p-0.5 ring-1 ring-white/5">
-      {(["comments", "words", "checks", "history"] as const).map((k) => (
+      {(["comments", "words", "checks", ...(hasShots ? (["shots"] as const) : []), "history"] as const).map((k) => (
         <button
           key={k}
           onClick={() => setSide(k)}
@@ -823,7 +837,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
               </div>
               {narrow && (
                 <div className="flex shrink-0 overflow-x-auto border-t border-white/5 bg-ink-900 px-2">
-                  {(["comments", "words", "checks", "timeline", "history"] as const).map((k) => (
+                  {(["comments", "words", "checks", ...(hasShots ? (["shots"] as const) : []), "timeline", "history"] as const).map((k) => (
                     <button
                       key={k}
                       onClick={() => setTab(k)}
@@ -886,6 +900,18 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
             onSeek={seek}
             onPlay={() => leader()?.video?.play().catch(() => {})}
             onPause={() => leader()?.video?.pause()}
+            onError={setError}
+          />
+        )}
+        {(narrow ? tab === "shots" : side === "shots") && hasShots && model && pid && pid !== NEW && !comparing && (
+          <ShotsPanel
+            header={narrow ? undefined : sideHeader}
+            full={narrow}
+            pid={pid}
+            time={time}
+            stamp={`${model.draftMtime}:${comments.length}:${comments.filter((c) => c.status === "undone").length}`}
+            canSwap={startsEdits}
+            onSeek={seek}
             onError={setError}
           />
         )}

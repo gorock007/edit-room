@@ -71,6 +71,12 @@ npm run dev        # server on :4310 + app on http://127.0.0.1:5310 (also keeps 
   template's default track. Plans and templates run headless Claude Code that may read
   anything but write only that one file or folder, with no web access (about 3 minutes each). The view updates by
   itself as new breakdowns land; the header badge counts new ones.
+- **Shots** (side panel, montage edits such as wild card templates): every shot of the edit in order, with what it
+  shows and why it was picked. **Swap** opens suggestions (best-looking moments that fit the template's story, from
+  on-device Vision labels in `.broll-index.json`), all your clips of the right shape, or **From phone…**; then pick the
+  exact part with a window locked to the shot's length, looped and framed as it'll look. Only that shot re-renders
+  (`montage_render.py`), so the beat timing never moves; Undo and History work as for cuts, and each swap is logged in
+  the template's `swaps.jsonl` so later builds pick the way you do (`server/shots.ts`).
 - **Music** (in New edit): **None** (voice only, the default), **Claude picks**, or a track from `Video Editor/background
   music/` with a play button. Tracks are measured into its `catalog.json` (BPM, beat times, hits) by the skill's
   `music_catalog.py` the first time they're listed (`server/music.ts`), so cuts can land on the beat. Add tracks by

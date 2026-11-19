@@ -20,6 +20,24 @@ const send = (method: string, url: string, body: unknown) => fetch(url, { method
 const postJson = (url: string, body: unknown) => send("POST", url, body);
 
 export type TemplateInfo = { slug: string; title: string; from: string | null; needs: string | null; useWhen: string | null; track: string | null; line: string | null };
+export type Shot = {
+  i: number;
+  part: string;
+  file: string | null;
+  name: string | null;
+  src: number | null;
+  frames: number;
+  dur: number;
+  start: number;
+  needs: "portrait" | "landscape" | null;
+  shows: string | null;
+  why: string | null;
+  cx: number;
+  sig: string;
+};
+export type ShotList = { shots: Shot[]; story: { line: string | null; show: string[]; never: string[] } | null; style: string | null; total: number };
+export type LibClip = { file: string; name: string; w: number; h: number; duration: number; screens: number; outdoors: number; people: number; best: number; mine: boolean; at: number };
+export type Suggestion = { file: string; t: number; labels: string[]; score: number };
 export type Track = {
   path: string;
   name: string;
@@ -39,6 +57,12 @@ export const api = {
   wildcard: (id: string) => fetch(`/api/wildcards/${encodeURIComponent(id)}`).then(j<WildDetail>),
   wildDecision: (id: string, state: "new" | "reference" | "dismissed") => postJson(`/api/wildcards/${encodeURIComponent(id)}/decision`, { state }).then(j),
   wildPlan: (id: string, idea: number, note: string) => postJson(`/api/wildcards/${encodeURIComponent(id)}/plan`, { idea, note }).then(j),
+  shots: (id: string) => fetch(`/api/projects/${id}/shots`).then(j<ShotList>),
+  shotClips: (id: string, i: number) => fetch(`/api/projects/${id}/shots/${i}/clips`).then(j<{ shot: Shot; clips: LibClip[]; suggestions: Suggestion[] }>),
+  clipPreview: (id: string, f: string) => fetch(`/api/projects/${id}/clip-preview?f=${encodeURIComponent(f)}`).then(j<{ state: "ready" | "working" | "failed"; url: string | null }>),
+  clipFrameUrl: (id: string, f: string, t: number) => `/media/${encodeURIComponent(id)}/clip-frame?f=${encodeURIComponent(f)}&t=${t.toFixed(2)}`,
+  shotThumbUrl: (id: string, i: number, sig: string) => `/media/${encodeURIComponent(id)}/shot/${i}?v=${sig}`,
+  swapShot: (id: string, i: number, b: { file: string; src: number; cx: number }) => postJson(`/api/projects/${id}/shots/${i}`, b).then(j<{ comment: Comment }>),
   wildMake: (id: string) => postJson(`/api/wildcards/${encodeURIComponent(id)}/make`, {}).then(j<{ id: string }>),
   wildTemplate: (id: string, name: string, note: string, exact = false) => postJson(`/api/wildcards/${encodeURIComponent(id)}/template`, { name, note, exact }).then(j),
   wildStop: (id: string) => postJson(`/api/wildcards/${encodeURIComponent(id)}/stop`, {}).then(j),

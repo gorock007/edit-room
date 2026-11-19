@@ -28,7 +28,7 @@ export type Checks = {
 };
 export type ProxyState = { status: "missing" | "ready" | "stale" | "building" | "failed"; error?: string; version: number };
 export type ProjectInfo = { id: string; name: string; hasDraft: boolean; hasOverlay: boolean; hasRaw: boolean };
-export type Dest = "raw" | "resources";
+export type Dest = "raw" | "resources" | "shots";
 export type Format = "9:16" | "16:9";
 export type RawInfo = {
   files: { name: string; size: number }[]; pending: { name: string; size: number; received: number; dest?: Dest }[]; note: string;

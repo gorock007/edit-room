@@ -11,6 +11,7 @@ import { KEYS, applyOption, hasOption } from "./options.ts";
 import { OWNER, can, type Person } from "./people.ts";
 import { changedSince, loadComments, newId, restore, saveComments, snapshot, updateComment, type Author, type Comment, type Target, type Tier } from "./store.ts";
 import { TIER_NAMES } from "./router.ts";
+import { ShotError, applySwap, listShots, logSwap, renderMontage, type SwapReq } from "./shots.ts";
 import { info, nameVersion, record, restoreFiles, same, syncOutside, versions, type Version } from "./versions.ts";
 
 /**
@@ -108,6 +109,9 @@ export function targetFromModel(p: Project, kind: string, id: string): { target:
 
 /** Projects with a direct cut in progress (one at a time). */
 const cutting = new Set<string>();
+const swapping = new Set<string>();
+/** A restore (undo, version) brought back an older shot list: render those shots before the preview is rebuilt. */
+const montageRestored = (files: string[]) => files.some((f) => f.endsWith(`${path.sep}montage.json`));
 
 export function makeRoom(e: Emitters) {
   /** Save a version (fn) and tell the room if one was added. */
@@ -265,7 +269,11 @@ export function makeRoom(e: Emitters) {
       })!;
       e.emitComment(u);
       if (c.changed.some((f) => f.endsWith("index.html"))) e.overlayChanged(p);
-      if (proxyState(p).status === "stale" && !(c.direct && restoreKeptProxy(p, cid))) buildProxy(p, () => e.projectChanged(p));
+      if (montageRestored(c.changed)) {
+        renderMontage(p)
+          .catch((err) => console.error(`undo ${cid}: ${err.message}`))
+          .then(() => buildProxy(p, () => e.projectChanged(p)));
+      } else if (proxyState(p).status === "stale" && !(c.direct && restoreKeptProxy(p, cid))) buildProxy(p, () => e.projectChanged(p));
       e.projectChanged(p);
       return u;
     },
@@ -334,6 +342,66 @@ export function makeRoom(e: Emitters) {
         quiet.delete(p.id);
         cutting.delete(p.id);
         e.projectChanged(p); // now that the room is listening again: the checks look at the edit as cut
+      }
+    },
+
+    /**
+     * Swap one shot of a montage edit for another clip (same length, so the beat timing never moves), like a CapCut
+     * template slot. Only that shot is re-rendered. Listed with the comments (Undo, who did it), saved as a version,
+     * and logged next to the template so later builds learn from it.
+     */
+    async swapShot(p: Project, who: Person, i: number, b: SwapReq) {
+      needRole(who, "editor");
+      if (agentBusy(p) || loadComments(p).some((c) => c.status === "queued")) throw new RoomError(409, "Claude is working on this edit. Wait for it to finish, then swap.");
+      if (swapping.has(p.id) || cutting.has(p.id)) throw new RoomError(409, "The last change is still being made.");
+      swapping.add(p.id);
+      quiet.add(p.id);
+      const cid = newId();
+      try {
+        outside(p);
+        snapshot(p, cid);
+        let r;
+        try {
+          r = applySwap(p, i, b);
+          await renderMontage(p);
+        } catch (err: any) {
+          restore(p, cid, changedSince(p, cid));
+          await renderMontage(p).catch(() => {});
+          throw err instanceof ShotError ? new RoomError(err.status, err.message) : err;
+        }
+        const changed = changedSince(p, cid);
+        const shot = listShots(p).shots[i];
+        const name = path.basename(r.after.file);
+        const c: Comment = {
+          id: cid,
+          project: p.id,
+          createdAt: Date.now(),
+          text: `Swapped shot ${i + 1} for ${name} at ${r.after.src.toFixed(1)} s`,
+          t: shot?.start ?? 0,
+          x: null,
+          y: null,
+          target: { kind: "broll", label: `shot ${i + 1} (${r.part})`, detail: `${r.dur.toFixed(2)} s` },
+          status: "done",
+          activity: [{ at: Date.now(), kind: "info", text: `${who.name} swapped it directly (was ${r.before.file ? path.basename(r.before.file) : "?"} at ${r.before.src ?? "?"} s)` }],
+          reply: `Shot ${i + 1} is now ${name} from ${r.after.src.toFixed(2)} s. Only that shot was re-rendered; the beat timing is unchanged.`,
+          changed,
+          finishedAt: Date.now(),
+          want: 1,
+          author: authorOf(who),
+          direct: true,
+        };
+        saveComments(p, [...loadComments(p), c]);
+        rec(p, () => record(p, { kind: "comment", what: c.text, by: c.author, comment: cid }));
+        try {
+          logSwap(p, { shot: i + 1, part: r.part, before: r.before, after: r.after, by: who.name });
+        } catch {}
+        buildProxy(p, () => e.projectChanged(p));
+        e.emitComment(c);
+        return { comment: c };
+      } finally {
+        quiet.delete(p.id);
+        swapping.delete(p.id);
+        e.projectChanged(p);
       }
     },
 
@@ -507,7 +575,11 @@ export function makeRoom(e: Emitters) {
       if (!wrote.length) throw new RoomError(400, `The edit is already the same as version ${n}.`);
       const saved = rec(p, () => record(p, { kind: "restore", what: `Restored version ${n}${v.label ? ` “${v.label}”` : ""}`, by: authorOf(who) }));
       if (wrote.some((f) => f.endsWith("index.html"))) e.overlayChanged(p);
-      if (proxyState(p).status === "stale") buildProxy(p, () => e.projectChanged(p));
+      if (montageRestored(wrote)) {
+        renderMontage(p)
+          .catch((err) => console.error(`restore version ${n}: ${err.message}`))
+          .then(() => buildProxy(p, () => e.projectChanged(p)));
+      } else if (proxyState(p).status === "stale") buildProxy(p, () => e.projectChanged(p));
       e.projectChanged(p);
       return saved ? info(saved) : null;
     },
