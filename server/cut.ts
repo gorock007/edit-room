@@ -30,7 +30,21 @@ const TRUSTED_BUILDER = path.join(SKILL_DIR, "assets/overlay-template/build_capt
 export const LINE_BUILDER = path.join(SKILL_DIR, "scripts/line_captions.py");
 export const STAGE_CONFIG = "stage_captions.json";
 export const isStage = (p: Project) => !!p.overlaysDir && fs.existsSync(path.join(p.overlaysDir, STAGE_CONFIG));
-const stageFile = (p: Project, rel: string) => (path.isAbsolute(rel) ? rel : path.resolve(p.overlaysDir!, rel));
+/**
+ * A path named in stage_captions.json, which a comment's agent can write: it must stay inside this edit's folder
+ * (symlinks resolved), or a cut would write wherever the file points.
+ */
+const stageFile = (p: Project, rel: unknown) => {
+  if (typeof rel !== "string" || !rel || path.isAbsolute(rel)) throw new CutError("stage_captions.json names a file outside the edit folder.");
+  const base = fs.realpathSync(p.editDir);
+  const f = path.resolve(p.overlaysDir!, rel);
+  let real = "";
+  try {
+    real = fs.existsSync(f) ? fs.realpathSync(f) : path.join(fs.realpathSync(path.dirname(f)), path.basename(f));
+  } catch {}
+  if (!real.startsWith(base + path.sep) || !/\.(json|txt)$/.test(real)) throw new CutError("stage_captions.json names a file outside the edit folder.");
+  return real;
+};
 
 type StageWord = { w: string; s: number; e: number; [k: string]: unknown };
 /** The stage edit's words (the file the line captions are built from) and, for each, the caption line it is on. */
