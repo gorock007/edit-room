@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { Comment, Dest, Format, LibraryFolder, RawInfo } from "../types";
+import type { TemplateInfo } from "../api";
 import { cx } from "../util";
 import { keepAwake, uploadFile } from "../upload";
 
@@ -37,6 +38,9 @@ export function NewEdit({ projectId, comments, narrow, onCreated, onError }: {
   const [format, setFormat] = useState<Format>(lastFormat);
   const [library, setLibrary] = useState<LibraryFolder[]>([]);
   const [folders, setFolders] = useState<string[]>([]);
+  // the look for this video: the house style (null) or a wild card template; house unless picked, every time
+  const [style, setStyle] = useState<string | null>(null);
+  const [templates, setTemplates] = useState<TemplateInfo[]>([]);
   const [over, setOver] = useState<Dest | null>(null);
   const [starting, setStarting] = useState(false);
   const idRef = useRef(projectId);
@@ -45,13 +49,13 @@ export function NewEdit({ projectId, comments, narrow, onCreated, onError }: {
   const input = useRef<HTMLInputElement>(null);
   const extraInput = useRef<HTMLInputElement>(null);
   // uploads take minutes: read what the user set by the time they finish, not when they began
-  const live = useRef({ note, auto, rows, building: false, format, folders, hasRaw: false });
+  const live = useRef({ note, auto, rows, building: false, format, folders, style, hasRaw: false });
 
   const build = comments.find((c) => c.target.kind === "build" && c.status !== "stopped" && c.status !== "failed");
   const lastBuild = [...comments].reverse().find((c) => c.target.kind === "build");
   const sending = rows.some((r) => r.state === "sending" || r.state === "waiting");
   const hasRaw = rows.some((r) => r.dest === "raw") || !!raw?.files.length;
-  live.current = { note, auto, rows, building: !!build, format, folders, hasRaw };
+  live.current = { note, auto, rows, building: !!build, format, folders, style, hasRaw };
   const allDone = hasRaw && rows.every((r) => r.state === "done") && !(rows.length === 0 && raw?.pending.length);
 
   const refresh = () => projectId && api.raw(projectId).then((r) => {
@@ -59,9 +63,11 @@ export function NewEdit({ projectId, comments, narrow, onCreated, onError }: {
     if (r.note && !note) setNote(r.note.trim());
     if (r.format) setFormat(r.format);
     if (r.folders.length) setFolders(r.folders);
+    if (r.style) setStyle(r.style);
   }).catch(() => {});
   useEffect(() => {
     api.libraryFolders().then(setLibrary).catch(() => {});
+    api.templates().then(setTemplates).catch(() => {});
   }, []);
   const pickFormat = (f: Format) => {
     setFormat(f);
@@ -139,7 +145,7 @@ export function NewEdit({ projectId, comments, narrow, onCreated, onError }: {
     if (!id) return;
     setStarting(true);
     try {
-      await api.build(id, live.current.note, live.current.format, live.current.folders);
+      await api.build(id, live.current.note, live.current.format, live.current.folders, live.current.style);
     } catch (e: any) {
       onError(e.message);
     } finally {
@@ -294,6 +300,39 @@ export function NewEdit({ projectId, comments, narrow, onCreated, onError }: {
               ))}
             </div>
           </div>
+          {templates.length > 0 && (
+            <div className="mt-4">
+              <div className="text-[12px] font-medium text-ink-300">Style</div>
+              <div className="mt-1.5 flex flex-wrap gap-1.5" role="radiogroup" aria-label="Style">
+                {[{ slug: null as string | null, title: "House" }, ...templates].map((t) => {
+                  const on = style === t.slug;
+                  return (
+                    <button
+                      key={t.slug ?? "house"}
+                      role="radio"
+                      aria-checked={on}
+                      onClick={() => setStyle(t.slug)}
+                      title={t.slug ? (t as TemplateInfo).useWhen ?? "" : "Your usual edit: the house style"}
+                      className={cx("rounded-full px-2.5 py-1 text-[12px] ring-1 transition", on ? "bg-gold/15 text-gold ring-gold/40" : "text-ink-300 ring-white/10 hover:ring-white/25")}
+                    >
+                      {t.slug ? "✦ " : ""}
+                      {t.title}
+                    </button>
+                  );
+                })}
+              </div>
+              {style && (() => {
+                const t = templates.find((x) => x.slug === style);
+                return t ? (
+                  <div className="mt-2 space-y-1 rounded-lg bg-ink-900 px-3 py-2 text-[12px] leading-relaxed ring-1 ring-white/5">
+                    {t.useWhen && <div className="text-ink-300"><span className="text-ink-500">Use when: </span>{t.useWhen}</div>}
+                    {t.needs && <div className="text-ink-300"><span className="text-ink-500">Needs: </span>{t.needs}</div>}
+                    <div className="text-ink-500">Only this video uses it; your house style stays the default.</div>
+                  </div>
+                ) : null;
+              })()}
+            </div>
+          )}
           {library.length > 0 && (
             <div className="mt-4">
               <div className="text-[12px] font-medium text-ink-300">Also draw b-roll from <span className="font-normal text-ink-500">(your footage folders, optional)</span></div>

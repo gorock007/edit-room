@@ -11,7 +11,8 @@ import { changedSince, loadComments, restore, saveComments, snapshot, updateComm
 import { KEYS, optionProject, saveOption, saveOptionFrom } from "./options.ts";
 import { bringHome, dropWorkspace, makeWorkspaces, type Workspace } from "./workspace.ts";
 import { ALL, coveredBy } from "../src/safezones.ts";
-import { rawDir, rawInfo, resourcesDir } from "./uploads.ts";
+import { buildOptions, rawDir, rawInfo, resourcesDir } from "./uploads.ts";
+import { TEMPLATES_DIR, templateOf } from "./wildcards.ts";
 import { routeFor } from "./router.ts";
 import { noteRateLimit, readUsage } from "./usage.ts";
 import { checksState, checksText, scheduleChecks } from "./checks.ts";
@@ -114,7 +115,9 @@ function describeTarget(c: Comment, p: Project) {
     const s = onScreen(m, c.t);
     const portrait = m.height > m.width;
     const under = portrait && c.x != null && c.y != null ? coveredBy(c.x, c.y) : [];
+    const tpl = templateOf(buildOptions(p).style);
     ctx = [
+      tpl ? `This edit uses the user's wild card template "${tpl.title}" (${path.join(TEMPLATES_DIR, tpl.slug)}/style.md): read it before changing the look, and keep to it rather than the house style.` : "",
       `Frame: ${m.width}x${m.height} (${portrait ? "vertical 9:16 for TikTok/Reels/Shorts" : "16:9"}).` +
         (portrait ? ` App UI covers roughly the top ${ALL.top}px, bottom ${ALL.bottom}px and right ${ALL.right}px (of 1080x1920); keep captions and key content inside.` : ""),
       under.length ? `The clicked point is under app UI: ${under.join("; ")}.` : "",
@@ -135,6 +138,16 @@ export function firstEditPrompt(c: Comment, p: Project) {
   const gb = (n: number) => (n >= 1024 ** 3 ? (n / 1024 ** 3).toFixed(2) + " GB" : Math.max(0.1, n / 1024 ** 2).toFixed(1) + " MB");
   const tall = raw.format !== "16:9";
   const folders = raw.folders.map((f) => path.join(VIDEO_ROOT, f));
+  const tpl = templateOf(raw.style);
+  const look = tpl
+    ? `Style: the user picked their wild card template "${tpl.title}" for this video, not the house look. It is in
+${path.join(TEMPLATES_DIR, tpl.slug)}: read style.md and tokens.json and look at refs/ before you plan anything (skill
+"Wild card templates"). Its rules win over the house look wherever they differ: pace, layout, where screenshots go,
+animation, colours, fonts, captions, sound, and its "never do" list. Everything it doesn't cover stays the house way
+(the cut quality, depop + voice chain, safe zones, references/lessons.md). Its "needs" line says what footage it
+expects: ${tpl.needs ?? "(not stated)"}. If the footage doesn't fit, build the closest version and say what's missing.
+Write "style": "${tpl.slug}" into edit-data/build_cfg.json.`
+    : "Style: the house look (no template picked).";
   return `The user uploaded raw footage for a NEW edit from Edit Room and pressed the button. They expect to come back to a
 finished edit without being asked anything in between.
 
@@ -143,6 +156,8 @@ ${raw.files.map((f) => `- ${f.name} (${gb(f.size)})`).join("\n")}
 
 Format: ${raw.format ?? "9:16"} (the user chose it; deliver only this format).
 
+${look}
+
 Extra material the user gave for THIS video (in ${resourcesDir(p)}):
 ${raw.resources.length ? raw.resources.map((f) => `- ${f.name} (${gb(f.size)})`).join("\n") : "(none)"}
 ${raw.resources.length ? "They picked these for this video: each one goes on screen where it fits the line, or your plan says why not.\n" : ""}
@@ -150,7 +165,7 @@ Their own footage folders to draw b-roll from: ${folders.length ? folders.map((f
 
 The user's note: ${raw.note.trim() ? `"${raw.note.trim()}"` : "(none: find the first script line and the end yourself, and drop off-script chatter)"}
 
-Build it end to end with the talking-head-reel-edit skill, in the house style, as an unattended build (the skill's
+Build it end to end with the talking-head-reel-edit skill, ${tpl ? `in the "${tpl.title}" template's style` : "in the house style"}, as an unattended build (the skill's
 "Unattended builds" paragraph), with these specifics:
 - Nobody is at a prompt. Do not stop to ask; make the call the skill, its references/lessons.md and the user's memory
   point to.

@@ -22,7 +22,7 @@ import { mcpHandler } from "./mcp.ts";
 import { versionProject } from "./versions.ts";
 import { readUsage } from "./usage.ts";
 import { checksState, scheduleChecks, setOk } from "./checks.ts";
-import { WILD_ROOT, WildError, folderOf, listTemplates, listWild, recoverWildJobs, setDecision, startPlan, startTemplate, stopWildJob, wildDetail, wildFile, type Decision } from "./wildcards.ts";
+import { WILD_ROOT, WildError, folderOf, listTemplates, templateOf, listWild, recoverWildJobs, setDecision, startPlan, startTemplate, stopWildJob, wildDetail, wildFile, type Decision } from "./wildcards.ts";
 import { DRIVER, GSAP_CDN_SRC, LOCAL_GSAP, OVERLAY_CSP, localGsapUrl, stillSeek } from "./overlay.ts";
 
 const app = express();
@@ -393,13 +393,17 @@ app.post("/api/projects/:id/build", need("editor"), withProject((p, req, res) =>
   if (!FORMATS.includes(format)) return res.status(400).json({ error: "choose 9:16 or 16:9 first" });
   const known = new Set(libraryFolders().map((f) => f.name));
   const folders = (Array.isArray(req.body?.folders) ? req.body.folders : []).filter((f: unknown): f is string => typeof f === "string" && known.has(f));
+  // the look: the house style (null) or one of the user's wild card templates
+  const style = req.body?.style == null || req.body.style === "" ? null : String(req.body.style);
+  const tpl = style ? templateOf(style) : null;
+  if (style && !tpl) return res.status(400).json({ error: "that template doesn't exist any more" });
   saveNote(p, note);
-  saveBuildOptions(p, { format, folders });
+  saveBuildOptions(p, { format, folders, style });
   const c: Comment = {
     id: newId(),
     project: p.id,
     createdAt: Date.now(),
-    text: `Build the first edit in ${format}.${raw.resources.length ? ` ${raw.resources.length} extra file${raw.resources.length > 1 ? "s" : ""} to use.` : ""}${note ? ` ${note}` : ""}`,
+    text: `Build the first edit in ${format}${tpl ? `, in the "${tpl.title}" template` : ""}.${raw.resources.length ? ` ${raw.resources.length} extra file${raw.resources.length > 1 ? "s" : ""} to use.` : ""}${note ? ` ${note}` : ""}`,
     t: 0,
     x: null,
     y: null,

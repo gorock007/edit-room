@@ -32,7 +32,7 @@ export type Dest = "raw" | "resources";
 export type Format = "9:16" | "16:9";
 export type RawInfo = {
   files: { name: string; size: number }[]; pending: { name: string; size: number; received: number; dest?: Dest }[]; note: string;
-  resources: { name: string; size: number }[]; format: Format | null; folders: string[];
+  resources: { name: string; size: number }[]; format: Format | null; folders: string[]; style: string | null;
 };
 export type LibraryFolder = { name: string; files: number };
 export type Target = { kind: "caption" | "frame" | "sfx" | "cut" | "broll" | "general" | "build"; id?: string; label: string; detail?: string };

@@ -128,7 +128,8 @@ export async function putChunk(p: Project, key: string, offset: number, req: htt
 type FileRow = { name: string; size: number };
 type PendingRow = FileRow & { received: number; dest?: Dest };
 /** What the build was asked for besides the footage: the format the user picked and library folders to draw from. */
-export type BuildOptions = { format: Format | null; folders: string[] };
+/** style: a wild card template's folder name in Video Editor/templates, or null for the house style. */
+export type BuildOptions = { format: Format | null; folders: string[]; style: string | null };
 export type RawInfo = { files: FileRow[]; pending: PendingRow[]; note: string; resources: FileRow[] } & BuildOptions;
 
 const list = (dir: string, dest: Dest): FileRow[] =>
@@ -140,9 +141,13 @@ const optionsFile = (p: Project) => path.join(rawDir(p), "build.json");
 export function buildOptions(p: Project): BuildOptions {
   try {
     const o = JSON.parse(fs.readFileSync(optionsFile(p), "utf8"));
-    return { format: FORMATS.includes(o.format) ? o.format : null, folders: Array.isArray(o.folders) ? o.folders.filter((x: unknown) => typeof x === "string") : [] };
+    return {
+      format: FORMATS.includes(o.format) ? o.format : null,
+      folders: Array.isArray(o.folders) ? o.folders.filter((x: unknown) => typeof x === "string") : [],
+      style: typeof o.style === "string" && /^[a-z0-9-]{1,60}$/.test(o.style) ? o.style : null,
+    };
   } catch {
-    return { format: null, folders: [] };
+    return { format: null, folders: [], style: null };
   }
 }
 export function saveBuildOptions(p: Project, o: BuildOptions) {
@@ -150,7 +155,7 @@ export function saveBuildOptions(p: Project, o: BuildOptions) {
   fs.writeFileSync(optionsFile(p), JSON.stringify(o, null, 1) + "\n");
 }
 
-const SKIP_DIRS = /^(\d{4}\w? edit|SFX Sounds|background music|editing-toolkit|graphic-type|references|reports|research_notes|capcut assets)$/i;
+const SKIP_DIRS = /^(\d{4}\w? edit|SFX Sounds|background music|editing-toolkit|graphic-type|references|reports|research_notes|capcut assets|wild cards|templates)$/i;
 /**
  * Folders of the user's own footage inside the video folder that an edit may draw b-roll from ("Brolls shots", a
  * shoot's folder): any top-level folder that is not an edit or a tools folder and holds video or pictures.

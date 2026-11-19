@@ -182,7 +182,8 @@ export function wildFile(id: string, rest: string): string | null {
   return inside(f, [dir]) && fs.existsSync(f) ? f : null;
 }
 
-export function listTemplates(): { slug: string; title: string; from: string | null }[] {
+export type TemplateInfo = { slug: string; title: string; from: string | null; needs: string | null; useWhen: string | null };
+export function listTemplates(): TemplateInfo[] {
   try {
     return fs
       .readdirSync(TEMPLATES_DIR, { withFileTypes: true })
@@ -190,8 +191,8 @@ export function listTemplates(): { slug: string; title: string; from: string | n
       .map((e) => {
         const text = fs.readFileSync(path.join(TEMPLATES_DIR, e.name, "style.md"), "utf8");
         const title = text.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? e.name;
-        const from = text.match(/^based on:\s*(.+)$/im)?.[1]?.trim() ?? null;
-        return { slug: e.name, title, from };
+        const line = (k: string) => text.match(new RegExp(`^${k}:\\s*(.+)$`, "im"))?.[1]?.trim().slice(0, 400) ?? null;
+        return { slug: e.name, title, from: line("based on"), needs: line("needs"), useWhen: line("use when") };
       });
   } catch {
     return [];
@@ -354,6 +355,12 @@ export function startTemplate(id: string, name: unknown, note: unknown, onChange
     .join("\n");
   const rule = "//" + tdir.replace(/^\//, "") + "/**";
   startJob(id, { kind: "template", status: "running", started: Date.now(), slug }, prompt, [`Write(${rule})`, `Edit(${rule})`], onChange);
+}
+
+/** The template an edit was built with (its build.json), for the build prompt and every later comment. */
+export function templateOf(slug: string | null): TemplateInfo | null {
+  if (!slug) return null;
+  return listTemplates().find((t) => t.slug === slug) ?? null;
 }
 
 export function stopWildJob(id: string) {

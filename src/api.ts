@@ -19,6 +19,8 @@ const plain = async <T,>(r: Response): Promise<T> => {
 const send = (method: string, url: string, body: unknown) => fetch(url, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 const postJson = (url: string, body: unknown) => send("POST", url, body);
 
+export type TemplateInfo = { slug: string; title: string; from: string | null; needs: string | null; useWhen: string | null };
+
 export type Me = { remote: boolean; authed: boolean; hasPassword: boolean; person: (Person & { projects: "all" | string[] }) | null; publicUrl: string | null };
 
 export const api = {
@@ -60,7 +62,8 @@ export const api = {
   raw: (id: string) => fetch(`/api/projects/${id}/raw`).then(j<RawInfo>),
   startUpload: (id: string, name: string, size: number, dest: Dest = "raw") =>
     postJson(`/api/projects/${id}/uploads`, { name, size, dest }).then(j<{ key: string; name: string; size: number; received: number; done: boolean }>),
-  build: (id: string, note: string, format: Format, folders: string[]) => postJson(`/api/projects/${id}/build`, { note, format, folders }).then(j<Comment>),
+  build: (id: string, note: string, format: Format, folders: string[], style: string | null) => postJson(`/api/projects/${id}/build`, { note, format, folders, style }).then(j<Comment>),
+  templates: () => fetch("/api/templates").then(j<TemplateInfo[]>),
   libraryFolders: () => fetch("/api/library-folders").then(j<LibraryFolder[]>),
   exportState: (id: string) => fetch(`/api/projects/${id}/export`).then(j<ExportState>),
   startExport: (id: string) => fetch(`/api/projects/${id}/export`, { method: "POST" }).then(j<ExportState>),
