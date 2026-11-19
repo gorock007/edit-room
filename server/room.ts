@@ -367,7 +367,10 @@ export function makeRoom(e: Emitters) {
           T.rows = (T.rows as any[]).map((r, i) => {
             const nr: any = (b.rows as any[])[i] ?? {};
             const out = { ...r };
-            if (!r.rule && nr.text != null) out.text = short(nr.text, 80);
+            if (!r.rule && nr.text != null) {
+              if (/[<>&]/.test(String(nr.text))) throw new RoomError(400, "A title can't contain < > or &.");
+              out.text = short(nr.text, 80);
+            }
             const c = colour(nr.color);
             if (c) out.color = c;
             const sz = n(nr.size, 12, 400);

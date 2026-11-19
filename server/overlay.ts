@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import type { Project } from "./projects.ts";
+import { getProject, type Project } from "./projects.ts";
+import { PORT } from "./config.ts";
 
 /** The caption composition gets this tiny time driver injected, so the app (and a still) can seek it frame-exactly. */
 export const DRIVER = `<script>
@@ -25,26 +26,27 @@ const CHROME = [
   "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
 ].find((f) => fs.existsSync(f));
 
+/** Appended to the composition for a still: seek to t once the page and its fonts are loaded. */
+export const stillSeek = (t: number) =>
+  `<script>addEventListener("load",()=>{const go=()=>{try{window.__room.seek(${t.toFixed(3)})}catch(e){}};go();document.fonts.ready.then(go)});</script>`;
+
 /**
- * The captions and titles exactly as the app draws them at t, as a transparent PNG (headless Chrome), so a still for
- * Claude shows what the person saw when they commented. False when it can't be made (no overlay, no Chrome): the
- * caller falls back to the bare picture.
+ * The captions and titles exactly as the app draws them at t, as a transparent PNG, so a still for Claude shows what
+ * the person saw when they commented. Headless Chrome loads the composition from this server's own overlay route (as
+ * the player does), with no file access and every other host unreachable. False when it can't be made (no overlay,
+ * no Chrome): the caller falls back to the bare picture.
  */
 export async function overlayStill(p: Project, t: number, w: number, h: number, out: string): Promise<boolean> {
-  if (!p.overlaysDir || !CHROME || !fs.existsSync(path.join(p.overlaysDir, "index.html"))) return false;
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "room-still-"));
+  // only a real project's own composition (an option or version copy is served under another path)
+  if (!p.overlaysDir || !CHROME || getProject(p.id)?.overlaysDir !== p.overlaysDir || !fs.existsSync(path.join(p.overlaysDir, "index.html"))) return false;
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "room-still-"));
   try {
-    // the composition's own folder, linked, so its fonts and scripts load as they do in the app
-    for (const n of fs.readdirSync(p.overlaysDir)) if (n !== "index.html") fs.symlinkSync(path.join(p.overlaysDir, n), path.join(dir, n));
-    const seek = `<script>addEventListener("load",()=>{const go=()=>{try{window.__room.seek(${t.toFixed(3)})}catch(e){}};go();document.fonts.ready.then(go)});</script>`;
-    const html = fs.readFileSync(path.join(p.overlaysDir, "index.html"), "utf8").replace("<head>", "<head>" + DRIVER).replace(/<\/body>/i, seek + "</body>");
-    fs.writeFileSync(path.join(dir, "still.html"), html);
+    const url = `http://127.0.0.1:${PORT}/overlay/${encodeURIComponent(p.id)}/index.html?still=${t.toFixed(3)}`;
     await new Promise<void>((resolve, reject) => {
       const ch = spawn(CHROME, [
-        "--headless=new", "--hide-scrollbars", "--allow-file-access-from-files", "--force-device-scale-factor=1",
-        `--user-data-dir=${path.join(dir, ".chrome")}`, "--no-first-run", "--disable-gpu",
-        `--window-size=${w},${h}`, "--virtual-time-budget=4000", "--default-background-color=00000000",
-        `--screenshot=${out}`, `file://${path.join(dir, "still.html")}`,
+        "--headless=new", "--hide-scrollbars", "--force-device-scale-factor=1", `--user-data-dir=${profile}`, "--no-first-run",
+        "--disable-gpu", "--disable-extensions", "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
+        `--window-size=${w},${h}`, "--virtual-time-budget=4000", "--default-background-color=00000000", `--screenshot=${out}`, url,
       ], { stdio: "ignore" });
       const timer = setTimeout(() => ch.kill("SIGKILL"), 30_000);
       ch.on("close", (code) => (clearTimeout(timer), code === 0 ? resolve() : reject(new Error(`chrome exited ${code}`))));
@@ -54,6 +56,6 @@ export async function overlayStill(p: Project, t: number, w: number, h: number, 
   } catch {
     return false;
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(profile, { recursive: true, force: true });
   }
 }

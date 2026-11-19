@@ -22,7 +22,7 @@ import { mcpHandler } from "./mcp.ts";
 import { versionProject } from "./versions.ts";
 import { readUsage } from "./usage.ts";
 import { checksState, scheduleChecks, setOk } from "./checks.ts";
-import { DRIVER } from "./overlay.ts";
+import { DRIVER, stillSeek } from "./overlay.ts";
 
 const app = express();
 app.set("case sensitive routing", true); // "/API/..." must not reach a route the login gate didn't recognise
@@ -577,7 +577,10 @@ app.get("/overlay/:id/{*rest}", withProject((p, req, res) => {
   // an option's folder links to the real one for everything it did not change, so both are allowed roots
   if (!inside(f, [dir, p.overlaysDir ?? dir]) || !fs.existsSync(f)) return res.status(404).end();
   if (rest === "index.html") {
-    const html = fs.readFileSync(f, "utf8").replace("<head>", "<head>" + DRIVER);
+    let html = fs.readFileSync(f, "utf8").replace("<head>", "<head>" + DRIVER);
+    // ?still=<seconds>: seek once loaded, for a still of the captions (overlay.ts, headless Chrome)
+    const still = Number(req.query.still);
+    if (req.query.still != null && Number.isFinite(still) && still >= 0) html = html.replace(/<\/body>/i, stillSeek(still) + "</body>");
     return res.type("html").set("Cache-Control", "no-store").send(html);
   }
   res.sendFile(f);
