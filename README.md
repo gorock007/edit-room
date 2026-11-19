@@ -53,6 +53,16 @@ npm run dev        # server on :4310 + app on http://127.0.0.1:5310 (also keeps 
   first edit, options, a high-effort change) wait as *Waiting* until you press Run. A model you pick by hand is never
   stepped down.
 - **Devices**: Desktop / Phone / In feed (`1` `2` `3`).
+- **Wild cards** (header): reels you shared from your phone (Share › **Edit Room**), broken down on the Mac by the
+  `reel-breakdown` skill's inbox watcher into `Video Editor/wild cards/<MMDD>-<handle>-<id>/` (`server/wildcards.ts`).
+  Each card shows the reel, why it worked, the full breakdown (click any `m:ss` time to play the reel from there), its
+  numbers, and three ideas for your own version. Decide: **Keep as reference**, **Dismiss**, **Plan this** on an idea
+  (Claude writes `plan-<n>.md`: hook, the whole script in your voice with what's on screen per line, what to record,
+  what's new to build) or **Make template** (Claude writes the look as rules into `Video Editor/templates/<name>/`:
+  `style.md` under one page with a "never do" list, `tokens.json`, reference frames). Templates are opt-in and never
+  touch CLAUDE.md, so the house style stays the default. Plans and templates run headless Claude Code that may read
+  anything but write only that one file or folder, with no web access (about 3 minutes each). The view updates by
+  itself as new breakdowns land; the header badge counts new ones.
 - **New edit** (`+` in the header): drop the raw camera file, or pick it from Photos/Files on the phone, add an
   optional note ("starts at …"), and Claude builds the first edit with the talking-head-reel-edit skill. The file goes
   to `<MMDD> edit/raw/` (today's date; `<MMDD>b` if that name is taken here or in CapCut) in 16 MB pieces, so a

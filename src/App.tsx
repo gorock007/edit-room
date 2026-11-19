@@ -14,6 +14,7 @@ import { Stage, type StageHandle } from "./components/Stage";
 import { Timeline } from "./components/Timeline";
 import { CommentsPanel, Kbd } from "./components/CommentsPanel";
 import { NewEdit } from "./components/NewEdit";
+import { WildCards } from "./components/WildCards";
 import { ExportMenu } from "./components/ExportMenu";
 import { SAFE_LABEL, modesFor, type SafeMode } from "./safezones";
 
@@ -69,6 +70,9 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
   const commenter = can(me, "commenter");
   const startsEdits = editor && me.projects === "all";
   const [presence, setPresence] = useState<Presence[]>([]);
+  const [wild, setWild] = useState(() => location.hash.startsWith("#wild"));
+  const [wildTick, setWildTick] = useState(0);
+  const [wildNew, setWildNew] = useState(0);
   const [sharing, setSharing] = useState(false);
   const narrow = useNarrow();
   const [tab, setTab] = useState<"comments" | "words" | "checks" | "timeline" | "history">("comments");
@@ -257,7 +261,22 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
     if (!comparing) setListen("current");
   }, [comparing]);
 
+  const wildRef = useRef(wild);
+  wildRef.current = wild;
+  useEffect(() => {
+    if (!startsEdits) return;
+    api
+      .wildcards()
+      .then((l) => setWildNew(l.cards.filter((c) => c.decision === "new" && c.state === "ready").length))
+      .catch(() => {});
+  }, [startsEdits, wildTick]);
+  const closeWild = useCallback(() => {
+    setWild(false);
+    window.history.replaceState(null, "", location.pathname + location.search);
+  }, []);
+
   const { online, send } = useSocket((m) => {
+    if (m.type === "wildcards") setWildTick((t) => t + 1);
     if (m.type === "presence") setPresence(m.people);
     if (m.type === "me") onMeChanged(); // the owner changed my role or projects
     if (m.type === "people") window.dispatchEvent(new Event("room:people"));
@@ -374,6 +393,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (wildRef.current) return; // the wild cards view has its own player
       if ((e.target as HTMLElement)?.closest("textarea, input, select")) return;
       const fps = model?.fps ?? 30;
       if (e.key === " ") {
@@ -518,10 +538,21 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
               <span className={cx(narrow && "hidden")}>New edit</span>
             </button>
           )}
+          {startsEdits && (
+            <button
+              onClick={() => (wild ? closeWild() : setWild(true))}
+              className={cx("relative flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[12px] ring-1", wild ? "bg-gold/15 text-gold ring-gold/30" : "text-ink-200 ring-white/10 hover:bg-white/5")}
+              title="Reels you shared from your phone, broken down"
+            >
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden><rect x="2.5" y="1.5" width="8" height="12" rx="1.5" stroke="currentColor" strokeWidth="1.4" transform="rotate(-8 6.5 7.5)" /><rect x="6" y="2.5" width="8" height="12" rx="1.5" stroke="currentColor" strokeWidth="1.4" fill="var(--color-ink-900)" transform="rotate(8 10 8.5)" /></svg>
+              <span className={cx(narrow && "hidden")}>Wild cards</span>
+              {wildNew > 0 && <span className="grid h-4 min-w-4 place-items-center rounded-full bg-gold px-1 text-[10px] font-bold text-ink-950 tnum">{wildNew}</span>}
+            </button>
+          )}
           {model && <span className="hidden whitespace-nowrap font-mono text-[11px] text-ink-500 tnum xl:inline">{model.width}×{model.height} · {fmt(model.duration)}</span>}
         </div>
 
-        <div className="hidden md:block">
+        <div className={cx("hidden", !wild && "md:block")}>
         <Segmented
           value={device}
           onChange={setDevice}
@@ -578,7 +609,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
               {narrow ? "9:16" : "Make 9:16 version"}
             </button>
           )}
-          {model && pid && pid !== NEW && <ExportMenu pid={pid} state={exportSt} busy={busy > 0} narrow={narrow} canEdit={editor} />}
+          {model && pid && pid !== NEW && !wild && <ExportMenu pid={pid} state={exportSt} busy={busy > 0} narrow={narrow} canEdit={editor} />}
           {editor && proxy?.status === "stale" && (
             <button onClick={() => pid && api.rebuild(pid)} className="rounded-md px-2 py-1 text-gold ring-1 ring-gold/30 hover:bg-gold/10">
               {narrow ? "Rebuild" : "Picture changed · rebuild"}
@@ -602,6 +633,9 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
         </button>
       )}
 
+      {wild && startsEdits ? (
+        <WildCards narrow={narrow} tick={wildTick} onClose={closeWild} onError={setError} />
+      ) : (
       <div className={cx("flex min-h-0 flex-1", narrow && "flex-col overflow-y-auto")}>
         <main className={cx("flex min-w-0 flex-col", narrow ? (comparing || !model ? "" : "sticky top-0 z-30 bg-ink-950") : "flex-1 overflow-y-auto")}>
           {compare && (
@@ -875,6 +909,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
         />
         )}
       </div>
+      )}
     </div>
     </MeContext.Provider>
   );

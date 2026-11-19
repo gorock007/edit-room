@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { WildDetail, WildList } from "./components/WildCards";
 import type { TitleChange, Checks, Comment, EditModel, ExportState, Invite, McpUrls, Person, PersonFull, Presence, ProjectInfo, ProxyState, RawInfo, Dest, Format, LibraryFolder, Role, Target, Tier, Transcript, Usage, VersionInfo, Pick } from "./types";
 
 /** Fired when the server says this device's session is gone; the app swaps to the login screen. */
@@ -21,6 +22,12 @@ const postJson = (url: string, body: unknown) => send("POST", url, body);
 export type Me = { remote: boolean; authed: boolean; hasPassword: boolean; person: (Person & { projects: "all" | string[] }) | null; publicUrl: string | null };
 
 export const api = {
+  wildcards: () => fetch("/api/wildcards").then(j<WildList>),
+  wildcard: (id: string) => fetch(`/api/wildcards/${encodeURIComponent(id)}`).then(j<WildDetail>),
+  wildDecision: (id: string, state: "new" | "reference" | "dismissed") => postJson(`/api/wildcards/${encodeURIComponent(id)}/decision`, { state }).then(j),
+  wildPlan: (id: string, idea: number, note: string) => postJson(`/api/wildcards/${encodeURIComponent(id)}/plan`, { idea, note }).then(j),
+  wildTemplate: (id: string, name: string, note: string) => postJson(`/api/wildcards/${encodeURIComponent(id)}/template`, { name, note }).then(j),
+  wildStop: (id: string) => postJson(`/api/wildcards/${encodeURIComponent(id)}/stop`, {}).then(j),
   me: () => fetch("/api/me").then(j<Me>),
   login: (password: string) => postJson("/api/login", { password }).then(plain),
   logout: () => fetch("/api/logout", { method: "POST" }),
@@ -80,7 +87,8 @@ type Msg =
   | { type: "versions"; id: string }
   | { type: "checks"; id: string; checks: Checks }
   | { type: "me" }
-  | { type: "people" };
+  | { type: "people" }
+  | { type: "wildcards"; at: number };
 
 /** One socket for the whole app; reconnects on its own. `send` drops messages while it is reconnecting. */
 export function useSocket(onMsg: (m: Msg) => void) {

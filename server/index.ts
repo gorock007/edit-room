@@ -22,6 +22,7 @@ import { mcpHandler } from "./mcp.ts";
 import { versionProject } from "./versions.ts";
 import { readUsage } from "./usage.ts";
 import { checksState, scheduleChecks, setOk } from "./checks.ts";
+import { WILD_ROOT, WildError, folderOf, listTemplates, listWild, recoverWildJobs, setDecision, startPlan, startTemplate, stopWildJob, wildDetail, wildFile, type Decision } from "./wildcards.ts";
 import { DRIVER, GSAP_CDN_SRC, LOCAL_GSAP, OVERLAY_CSP, localGsapUrl, stillSeek } from "./overlay.ts";
 
 const app = express();
@@ -585,6 +586,56 @@ app.get("/overlay/:id/{*rest}", withProject((p, req, res) => {
     if (req.query.still != null && Number.isFinite(still) && still >= 0) html = html.replace(/<\/body>/i, stillSeek(still) + "</body>");
     return res.type("html").set("Cache-Control", "no-store").send(html);
   }
+  res.sendFile(f);
+}));
+
+// ---- wild cards: reels shared from the phone, broken down by the reel-breakdown skill's inbox watcher ----
+const wildOk: express.RequestHandler = (req, res, next) =>
+  me(req).projects === "all" ? next() : res.status(403).json({ error: "Wild cards are for people with access to every project." });
+const wild = (fn: (req: express.Request, res: express.Response) => unknown) => async (req: express.Request, res: express.Response) => {
+  try {
+    await fn(req, res);
+  } catch (e: any) {
+    res.status(e instanceof WildError ? e.status : 500).json({ error: String(e?.message ?? e) });
+  }
+};
+const wildChanged = () => send({ type: "wildcards", at: Date.now() });
+let wildSoon: NodeJS.Timeout | null = null;
+fs.mkdirSync(WILD_ROOT, { recursive: true });
+chokidar
+  .watch(WILD_ROOT, { ignoreInitial: true, depth: 1, ignored: (f) => /\/(frames|inbox)(\/|$)/.test(f) })
+  .on("all", () => {
+    if (wildSoon) clearTimeout(wildSoon);
+    wildSoon = setTimeout(wildChanged, 800);
+  });
+recoverWildJobs();
+const DECISIONS = new Set<Decision>(["new", "reference", "dismissed"]);
+app.get("/api/wildcards", need("editor"), wildOk, wild((_req, res) => res.json(listWild())));
+app.get("/api/wildcards/:id", need("editor"), wildOk, wild((req, res) => res.json(wildDetail(String(req.params.id)))));
+app.post("/api/wildcards/:id/decision", need("editor"), wildOk, wild((req, res) => {
+  const state = String(req.body?.state) as Decision;
+  if (!DECISIONS.has(state)) throw new WildError(400, "unknown decision");
+  res.json(setDecision(String(req.params.id), state, me(req).name));
+  wildChanged();
+}));
+app.post("/api/wildcards/:id/plan", need("editor"), wildOk, wild((req, res) => {
+  startPlan(String(req.params.id), Number(req.body?.idea), req.body?.note, wildChanged);
+  res.json({ ok: true });
+}));
+app.post("/api/wildcards/:id/template", need("editor"), wildOk, wild((req, res) => {
+  startTemplate(String(req.params.id), req.body?.name, req.body?.note, wildChanged);
+  res.json({ ok: true });
+}));
+app.post("/api/wildcards/:id/stop", need("editor"), wildOk, wild((req, res) => {
+  stopWildJob(String(req.params.id));
+  res.json({ ok: true });
+}));
+app.get("/api/templates", need("editor"), (_req, res) => res.json(listTemplates()));
+app.get("/media/wild/:id/{*rest}", need("editor"), wildOk, wild((req, res) => {
+  const rest = ([] as string[]).concat((req.params as any).rest ?? []).join("/");
+  folderOf(String(req.params.id));
+  const f = wildFile(String(req.params.id), rest);
+  if (!f) return res.status(404).end();
   res.sendFile(f);
 }));
 
