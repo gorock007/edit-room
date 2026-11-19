@@ -13,7 +13,9 @@ import type { Project } from "./projects.ts";
  *    everything later moves earlier);
  *  - the caption data (captions.json and the layout's times), then index.html is laid out again by the skill's
  *    build_captions.py;
- *  - the cut lists the skill keeps next to them (timeline.json, final_words.json).
+ *  - the cut lists the skill keeps next to them (timeline.json, final_words.json);
+ *  - a stage-format edit (overlays/stage_captions.json): its words file, lines.txt, stage_shots.json, stage_sfx_plan.json
+ *    and title times, then index.html is laid out again by the skill's line_captions.py --rebuild.
  * The caller snapshots the files first (undo) and patches the preview afterwards (proxy.ts patchProxy).
  */
 
@@ -24,6 +26,35 @@ export type CutResult = { a: number; b: number; af: number; bf: number; fps: num
 export class CutError extends Error {}
 
 const TRUSTED_BUILDER = path.join(SKILL_DIR, "assets/overlay-template/build_captions.py");
+/** Stage-format edits: line captions (and titles such as the hook), rebuilt from overlays/stage_captions.json. */
+export const LINE_BUILDER = path.join(SKILL_DIR, "scripts/line_captions.py");
+export const STAGE_CONFIG = "stage_captions.json";
+export const isStage = (p: Project) => !!p.overlaysDir && fs.existsSync(path.join(p.overlaysDir, STAGE_CONFIG));
+const stageFile = (p: Project, rel: string) => (path.isAbsolute(rel) ? rel : path.resolve(p.overlaysDir!, rel));
+
+type StageWord = { w: string; s: number; e: number; [k: string]: unknown };
+/** The stage edit's words (the file the line captions are built from) and, for each, the caption line it is on. */
+export function stageWords(p: Project): { cfg: any; file: string; raw: StageWord[]; words: Word[] } {
+  const cfg = readJson(path.join(p.overlaysDir!, STAGE_CONFIG));
+  const file = stageFile(p, cfg.words);
+  const raw: StageWord[] = readJson(file);
+  if (!Array.isArray(raw) || !raw.every((x) => typeof x?.s === "number" && typeof x?.e === "number")) throw new CutError("The words file has no start and end times.");
+  const lineOf: number[] = [];
+  try {
+    const rows = fs.readFileSync(stageFile(p, cfg.lines ?? "lines.txt"), "utf8").split("\n").filter((r) => r.trim());
+    rows.forEach((r, i) => (r.replace(/^#/, "").trim().match(/\[[^\]]+\]|\S+/g) ?? []).forEach(() => lineOf.push(i)));
+  } catch {}
+  const words = raw.map((x, i) => ({ i, g: lineOf[i] ?? 0, t: String(x.w ?? (x as any).text ?? ""), s: x.s, e: x.e }));
+  return { cfg, file, raw, words };
+}
+
+/** Lay the stage captions out again from stage_captions.json (the skill's own script, never a copy). */
+export function rebuildStageCaptions(p: Project): string | null {
+  if (!fs.existsSync(LINE_BUILDER)) return "the skill's line_captions.py is missing";
+  const r = spawnSync("python3", ["-I", LINE_BUILDER, "--rebuild", p.overlaysDir!], { cwd: os.tmpdir(), encoding: "utf8", timeout: 60_000 });
+  if (r.status === 0) return null;
+  return `${r.stderr ?? ""}${r.stdout ?? ""}`.trim().split("\n").slice(-2).join(" ").slice(0, 300) || String(r.error ?? "unknown error");
+}
 const sha = (f: string) => crypto.createHash("sha256").update(fs.readFileSync(f)).digest("hex");
 const readJson = (f: string) => JSON.parse(fs.readFileSync(f, "utf8"));
 const writeJson = (f: string, v: unknown, indent?: number) => {
@@ -36,6 +67,15 @@ const r4 = (n: number) => Math.round(n * 10000) / 10000;
 /** Why this edit can't be cut directly, or null if it can. */
 function blocker(p: Project): string | null {
   if (!p.draftDir) return "This edit isn't built yet.";
+  if (isStage(p)) {
+    if (!fs.existsSync(LINE_BUILDER)) return "The skill's line_captions.py is missing, so the captions can't be laid out again here.";
+    try {
+      stageWords(p);
+    } catch (e: any) {
+      return `This edit's words can't be read (${String(e?.message ?? e).slice(0, 120)}). Ask Claude for the cut in a comment.`;
+    }
+    return null;
+  }
   if (!p.overlaysDir || !fs.existsSync(path.join(p.overlaysDir, "captions.json"))) return "This edit has no captions to read the words from.";
   const own = path.join(p.overlaysDir, "build_captions.py");
   // only the skill's own caption builder is ever run by the server (see exporter.ts relayCaptions)
@@ -67,7 +107,7 @@ export function transcript(p: Project): Transcript {
   } catch {}
   let words: Word[] = [];
   try {
-    words = captionWords(readJson(path.join(p.overlaysDir!, "captions.json"))) ?? [];
+    words = isStage(p) ? stageWords(p).words : captionWords(readJson(path.join(p.overlaysDir!, "captions.json"))) ?? [];
   } catch {}
   const why = blocker(p);
   return { words, duration, fps, canCut: !why, ...(why ? { why } : {}) };
@@ -100,10 +140,18 @@ export function applyCut(p: Project, a0: number, b0: number): CutResult {
   /** a time on the old timeline -> the same moment after the cut */
   const tm = (t: number) => (t <= a ? t : t < b ? a : t - len);
 
+  const stage = isStage(p);
   // ---- captions.json: which words go, and where the rest land ----
   const capFile = path.join(p.overlaysDir!, "captions.json");
-  const cap = readJson(capFile);
+  const cap = stage ? { groups: [] } : readJson(capFile);
   const gone: string[] = [];
+  const sw = stage ? stageWords(p) : null;
+  const goneIdx = new Set<number>();
+  if (sw)
+    sw.words.forEach((w) => {
+      const mid = (w.s + w.e) / 2;
+      if (mid >= a && mid < b) goneIdx.add(w.i), gone.push(w.t);
+    });
   const groupMap = new Map<number, number>(); // old group index -> new
   const groups: any[] = [];
   for (const [gi, g] of (cap.groups as any[]).entries()) {
@@ -241,6 +289,59 @@ export function applyCut(p: Project, a0: number, b0: number): CutResult {
     const v = safeJson(f);
     if (Array.isArray(v) && v.length && v.every((x) => typeof x?.s === "number" && typeof x?.e === "number"))
       side.push([f, v.filter((w) => !((w.s + w.e) / 2 >= a && (w.s + w.e) / 2 < b)).map((w) => ({ ...w, s: r3(tm(w.s)), e: r3(Math.max(tm(w.e), tm(w.s) + 0.02)) }))]);
+  }
+
+  // ---- a stage edit: its words, caption lines, stage shots, their sounds and the titles move with the cut ----
+  if (sw) {
+    const newDur = r3((total - n) / fps);
+    const keep = sw.raw.filter((_, i) => !goneIdx.has(i)).map((w) => ({ ...w, s: r4(tm(w.s)), e: r4(Math.max(tm(w.e), tm(w.s) + 0.02)) }));
+    const cfg = sw.cfg;
+    const linesFile = stageFile(p, cfg.lines ?? "lines.txt");
+    let k = 0;
+    const rows = fs.readFileSync(linesFile, "utf8").split("\n").filter((r) => r.trim()).flatMap((r) => {
+      const hidden = r.startsWith("#");
+      const toks = (r.replace(/^#/, "").trim().match(/\[[^\]]+\]|\S+/g) ?? []).filter(() => !goneIdx.has(k++));
+      return toks.length ? [(hidden ? "#" : "") + toks.join(" ")] : [];
+    });
+    const shotsFile = cfg.shots && cfg.shots !== "-" ? stageFile(p, cfg.shots) : null;
+    const shots = shotsFile ? safeJson(shotsFile) : null;
+    if (shots && Array.isArray(shots.shots)) {
+      shots.shots = shots.shots.flatMap((sh: any) => {
+        const S = sh.start, E = sh.end;
+        if (S >= a && E <= b) return []; // the whole shot was cut
+        const ns = r4(tm(S));
+        const out = { ...sh, start: ns, end: r4(tm(E)), in: r4(Math.max(0, tm(S + sh.in) - ns)), out: r4(Math.max(0, tm(S + sh.out) - ns)) };
+        // the composited card (B-roll) was cut with the draft; a re-render of the scene has to skip the same stretch
+        if (b > S && a < E) out.trimmed = [...(sh.trimmed ?? []), [r4(Math.max(0, a - S)), r4(Math.min(E, b) - S)]];
+        return [out];
+      });
+    }
+    const sfxFile = path.join(p.editDir, "edit-data", "stage_sfx_plan.json");
+    const sfx = safeJson(sfxFile);
+    const sfxNew = Array.isArray(sfx)
+      ? sfx.flatMap((row: any) => {
+          if (!Array.isArray(row) || typeof row[5] !== "number") return [row];
+          const at = row[5] + SOUND_LEAD;
+          if (at >= b) return [Object.assign([...row], { 5: r4(Math.max(0, row[5] - len)) })];
+          if (at >= a) return gone.length ? [] : [Object.assign([...row], { 5: r4(Math.min(row[5], a)) })];
+          return [row];
+        })
+      : null;
+    cfg.duration = newDur;
+    for (const T of cfg.titles ?? []) {
+      if (typeof T.start === "number") T.start = r3(tm(T.start));
+      if (typeof T.end === "number") T.end = r3(tm(T.end));
+    }
+    writeJson(draftFile, d);
+    writeJson(sw.file, keep, 1);
+    fs.writeFileSync(linesFile, rows.join("\n") + "\n");
+    if (shots && shotsFile) writeJson(shotsFile, shots, 1);
+    if (sfxNew) writeJson(sfxFile, sfxNew, 1);
+    for (const [f, v] of side) if (path.resolve(f) !== path.resolve(sw.file)) writeJson(f, v);
+    writeJson(path.join(p.overlaysDir!, STAGE_CONFIG), cfg, 1);
+    const why = rebuildStageCaptions(p);
+    if (why) throw new CutError(`The captions could not be laid out after this cut (${why}). Nothing was changed.`);
+    return { a, b, af, bf, fps, frames: total - n, duration: (total - n) / fps, words: gone, soundsDropped, soundsMoved };
   }
 
   // ---- write, then lay the captions out again from the new draft ----

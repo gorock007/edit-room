@@ -5,7 +5,8 @@ import { readModel, type Project } from "./projects.ts";
 import { buildProxy, patchProxy, proxyState, pruneKeptProxies, restoreKeptProxy } from "./proxy.ts";
 import { exportState, startExport } from "./exporter.ts";
 import { INTERRUPTED, enqueue, isRunning, quiet, stop } from "./agent.ts";
-import { CutError, applyCut, transcript } from "./cut.ts";
+import { CutError, STAGE_CONFIG, applyCut, isStage, rebuildStageCaptions, transcript } from "./cut.ts";
+import fs from "node:fs";
 import { KEYS, applyOption, hasOption } from "./options.ts";
 import { OWNER, can, type Person } from "./people.ts";
 import { changedSince, loadComments, newId, restore, saveComments, snapshot, updateComment, type Author, type Comment, type Target, type Tier } from "./store.ts";
@@ -333,6 +334,87 @@ export function makeRoom(e: Emitters) {
         quiet.delete(p.id);
         cutting.delete(p.id);
         e.projectChanged(p); // now that the room is listening again: the checks look at the edit as cut
+      }
+    },
+
+    /**
+     * Change a title directly (stage-format edits): move it, change its words, colours or sizes, or remove it. The
+     * change goes into overlays/stage_captions.json and the captions are laid out again, so no rebuild ever loses it.
+     * Listed with the comments (Undo, who did it) and saved as a version, like a direct cut.
+     */
+    titles(p: Project, who: Person, b: { id?: unknown; x?: unknown; y?: unknown; rows?: unknown; remove?: unknown; what?: unknown }) {
+      needRole(who, "editor");
+      if (!isStage(p)) throw new RoomError(400, "Only stage-format edits have titles you can change here.");
+      if (agentBusy(p) || loadComments(p).some((c) => c.status === "queued")) throw new RoomError(409, "Claude is working on this edit. Wait for it to finish, then change the title.");
+      const id = short(b.id, 40);
+      const cfgFile = path.join(p.overlaysDir!, STAGE_CONFIG);
+      const cfg = JSON.parse(fs.readFileSync(cfgFile, "utf8"));
+      const list: any[] = Array.isArray(cfg.titles) ? cfg.titles : [];
+      const T = list.find((x) => String(x.id) === id);
+      if (!T) throw new RoomError(404, "no such title");
+      const colour = (v: unknown) => (typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v) ? v : undefined);
+      const n = (v: unknown, lo: number, hi: number) => num(v, lo, hi) ?? undefined;
+      let what = short(b.what, 80);
+      if (b.remove === true) {
+        cfg.titles = list.filter((x) => x !== T);
+        what ||= "Removed the title";
+      } else {
+        const x = n(b.x, 0, 4000), y = n(b.y, 0, 4000);
+        if (x != null) T.x = Math.round(x);
+        if (y != null) T.y = Math.round(y);
+        if (Array.isArray(b.rows)) {
+          if (b.rows.length !== (T.rows ?? []).length) throw new RoomError(400, "rows don't match the title");
+          T.rows = (T.rows as any[]).map((r, i) => {
+            const nr: any = (b.rows as any[])[i] ?? {};
+            const out = { ...r };
+            if (!r.rule && nr.text != null) out.text = short(nr.text, 80);
+            const c = colour(nr.color);
+            if (c) out.color = c;
+            const sz = n(nr.size, 12, 400);
+            if (!r.rule && sz != null) out.size = Math.round(sz);
+            return out;
+          });
+        }
+        what ||= "Changed the title";
+      }
+      const cid = newId();
+      quiet.add(p.id);
+      try {
+        outside(p);
+        snapshot(p, cid);
+        fs.writeFileSync(cfgFile + ".tmp", JSON.stringify(cfg, null, 1));
+        fs.renameSync(cfgFile + ".tmp", cfgFile);
+        const why = rebuildStageCaptions(p);
+        if (why) {
+          restore(p, cid, changedSince(p, cid));
+          throw new RoomError(400, `The captions could not be laid out again (${why}). Nothing was changed.`);
+        }
+        const c: Comment = {
+          id: cid,
+          project: p.id,
+          createdAt: Date.now(),
+          text: what,
+          t: Math.max(0, (T.start ?? 0) + 0.8),
+          x: null,
+          y: null,
+          target: { kind: "frame", label: `title “${id}”` },
+          status: "done",
+          activity: [{ at: Date.now(), kind: "info", text: `${who.name} changed the title directly` }],
+          reply: `${what}. Saved in stage_captions.json, so later cuts and caption changes keep it.`,
+          changed: changedSince(p, cid),
+          finishedAt: Date.now(),
+          want: 1,
+          author: authorOf(who),
+          direct: true,
+        };
+        saveComments(p, [...loadComments(p), c]);
+        rec(p, () => record(p, { kind: "comment", what: c.text, by: c.author, comment: cid }));
+        e.emitComment(c);
+        e.overlayChanged(p);
+        return { comment: c };
+      } finally {
+        quiet.delete(p.id);
+        e.projectChanged(p);
       }
     },
 

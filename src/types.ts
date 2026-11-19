@@ -1,10 +1,14 @@
 export type Seg = { id: string; start: number; dur: number; label: string; file: string; scale: number; src: number };
 export type CapGroup = { id: string; start: number; dur: number; text: string; big: string };
 export type Sfx = { id: string; track: string; start: number; dur: number; src: number; volume: number; file: string; name: string };
+export type TitleRow = { text?: string; rule?: boolean; size?: number; color?: string; weight?: number; spacing?: number; width?: number; mt?: number; mb?: number };
+/** Big text such as the opening hook (stage-format edits): x its centre, y its top, in frame pixels. */
+export type Title = { id: string; s: number; e: number; x: number; y: number; rows: TitleRow[] };
+export type TitleChange = { id: string; x?: number; y?: number; rows?: { text?: string; color?: string; size?: number }[]; remove?: boolean; what: string };
 export type EditModel = {
   project: { id: string; name: string };
   duration: number; fps: number; width: number; height: number;
-  cuts: Seg[]; broll: Seg[]; captions: CapGroup[]; sfx: Sfx[];
+  cuts: Seg[]; broll: Seg[]; captions: CapGroup[]; sfx: Sfx[]; titles?: Title[] | null;
   hasOverlay: boolean; pictureHash: string; draftMtime: number;
 };
 export type ExportReport = {

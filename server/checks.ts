@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { draftMediaFiles, readModel, type EditModel, type Project } from "./projects.ts";
 import { proxyFile, proxyState } from "./proxy.ts";
+import { STAGE_CONFIG, isStage, stageWords } from "./cut.ts";
 
 /**
  * Checks: Edit Room watches and listens to the preview so the person doesn't have to find the same faults by hand
@@ -45,7 +46,10 @@ export type Checks = {
 
 // ---- limits, set from the user's finished edits (1110, 1114b, 1116b, 1116n: none has a silence over 0.42 s) ----
 const PAUSE_SEC = 0.45;
-const PAUSE_EDGE_SEC = 0.3; // dead air before the first word or after the last
+// dead air before the first word or after the last. 1119: the user flagged 0.07 s at the start ("always start with
+// video straightaway") and a 0.37 s tail ("cut it out right after I say learn")
+const PAUSE_HEAD_SEC = 0.06;
+const PAUSE_TAIL_SEC = 0.2;
 const SILENT_DB = 30; // this far under the voice's loud level counts as silence
 const COLOUR_Y = 7, COLOUR_C = 3.5; // jump in brightness / colour (8-bit) across a join in the same shot
 const SYNC_SEC = 0.3, SYNC_RUN = 3; // captions this far off the speech, for this many words in a row
@@ -75,7 +79,9 @@ function keyOf(p: Project): string | null {
   try {
     const st = fs.statSync(proxyFile(p));
     const draft = fs.readFileSync(path.join(p.draftDir!, "draft_info.json"));
-    const cap = p.overlaysDir && fs.existsSync(path.join(p.overlaysDir, "captions.json")) ? fs.readFileSync(path.join(p.overlaysDir, "captions.json")) : "";
+    const capFile = p.overlaysDir && [STAGE_CONFIG, "captions.json"].map((n) => path.join(p.overlaysDir!, n)).find((f) => fs.existsSync(f));
+    // a stage edit's words live in their own file: a cut changes it, so the checks are made again
+    const cap = capFile ? fs.readFileSync(capFile) + (isStage(p) ? (() => { try { return fs.readFileSync(stageWords(p).file, "utf8"); } catch { return ""; } })() : "") : "";
     return sha(`${st.size}|${st.mtimeMs}|${sha(draft)}|${sha(cap)}`);
   } catch {
     return null;
@@ -247,10 +253,10 @@ function pauses(env: number[], words: { s: number; e: number }[], duration: numb
       runStart = -1;
       const head = s < 0.05, tail = e > duration - 0.05;
       const len = e - s;
-      if (len < (head || tail ? PAUSE_EDGE_SEC : PAUSE_SEC)) continue;
-      // keep a breath on each side inside the video; take it all at the very start or end
-      const a = head ? 0 : s + 0.08, b = tail ? duration : e - 0.08;
-      if (b - a < 0.1) continue;
+      if (len < (head ? PAUSE_HEAD_SEC : tail ? PAUSE_TAIL_SEC : PAUSE_SEC)) continue;
+      // keep a breath on each side inside the video; at the very start keep one frame, at the end 0.1 s after the word
+      const a = head ? 0 : tail ? s + 0.1 : s + 0.08, b = tail ? duration : head ? e - 0.03 : e - 0.08;
+      if (b - a < (head || tail ? 0.03 : 0.1)) continue;
       out.push({
         id: idOf("pause", s), kind: "pause", level: "look", t: s, end: e,
         title: head ? `${secs(len)} of silence before the first word` : tail ? `${secs(len)} of silence at the end` : `A ${secs(len)} pause at ${clock(s)}`,
@@ -322,6 +328,12 @@ function colour(stats: [number, number, number][], m: EditModel, edges: number[]
 
 type CapWord = { t: string; s: number; e: number };
 function captionWords(p: Project): CapWord[] {
+  if (isStage(p))
+    try {
+      return stageWords(p).words.map((w) => ({ t: w.t, s: w.s, e: w.e }));
+    } catch {
+      return [];
+    }
   const cap = p.overlaysDir ? read(path.join(p.overlaysDir, "captions.json")) : null;
   const out: CapWord[] = [];
   for (const g of cap?.groups ?? []) for (const w of g.words ?? []) if (typeof w?.s === "number" && typeof w?.t === "string") out.push({ t: w.t, s: w.s, e: typeof w.e === "number" ? w.e : w.s + 0.2 });
@@ -373,8 +385,20 @@ function align(cap: CapWord[], heard: { w: string; s: number; e: number }[]) {
   return { pairs, onlyCap, onlyHeard };
 }
 
-export function compare(cap: CapWord[], heard: { w: string; s: number; e: number }[]): Issue[] {
+/** Whisper splits a number ("41", ".3", "%"; "5", ".2"): join the pieces back into one word, as the captions write it. */
+function joinNumbers(heard: { w: string; s: number; e: number }[]) {
+  const out: { w: string; s: number; e: number }[] = [];
+  for (const h of heard) {
+    const w = h.w.trim(), prev = out.at(-1);
+    if (prev && /\d[.%]?$/.test(prev.w.trim()) && /^(\.\d+%?[.,?!]?|%[.,?!]?)$/.test(w)) prev.w = prev.w.trim() + w, (prev.e = h.e);
+    else out.push({ ...h });
+  }
+  return out;
+}
+
+export function compare(cap: CapWord[], heard0: { w: string; s: number; e: number }[]): Issue[] {
   const out: Issue[] = [];
+  const heard = joinNumbers(heard0);
   if (!cap.length || !heard.length) return out;
   const { pairs, onlyCap, onlyHeard } = align(cap, heard);
   // a caption word and a heard word left over side by side are one word heard differently, not two faults

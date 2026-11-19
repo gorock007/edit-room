@@ -5,7 +5,8 @@ import { query, tool, createSdkMcpServer, type SDKMessage } from "@anthropic-ai/
 import { z } from "zod";
 import { CAPCUT_DRAFTS, DATA_DIR, READ_ROOTS, SKILL_DIR, VIDEO_ROOT, WRITE_ROOTS, inside } from "./config.ts";
 import { getProject, onScreen, readModel, type Project } from "./projects.ts";
-import { buildProxy, grabFrame, proxyFile, proxyState } from "./proxy.ts";
+import { buildProxy, grabFrame, patchProxy, proxyFile, proxyState } from "./proxy.ts";
+import { CutError, applyCut } from "./cut.ts";
 import { changedSince, loadComments, restore, saveComments, snapshot, updateComment, type Activity, type Comment } from "./store.ts";
 import { KEYS, optionProject, saveOption, saveOptionFrom } from "./options.ts";
 import { bringHome, dropWorkspace, makeWorkspaces, type Workspace } from "./workspace.ts";
@@ -51,18 +52,32 @@ How the preview is built, so your change shows up:
   call the room_refresh_picture tool after such a change.
 - room_check watches and listens to the preview for you (pauses, caption sync, clipped or repeated words, colour
   jumps). After a change to cuts or caption timing, call it if you are not sure the result is clean.
-- Stage-format edits (the edit folder has edit-data/stage_shots.json; the skill's references/stage.md) are built
-  differently: the captions in overlays/ are the skill's line captions (scripts/line_captions.py from
-  edit-data/caption_words.json + overlays/lines.txt + stage_shots.json), not build_captions.py groups. Change a
-  caption by editing lines.txt (or the words file) and re-running line_captions.py into overlays/. The explainers are
-  stage shots: scenes in <edit>/stage/scenes/*.html (one per shot, times from the shot's start), rendered off iCloud,
-  then composited by scripts/stage_shot.py into the B-roll track's stage_<id>.mp4. A cut inside or before a stage
-  shot moves its words: update stage_shots.json (start/end/in/out), the scene's word times, re-render that shot, and
-  re-run line_captions.py so the caption line still rides with the card.
+- Stage-format edits (overlays/stage_captions.json exists; the skill's references/stage.md) are built differently.
+  Their captions AND titles (the opening hook) are made by the skill's scripts/line_captions.py from
+  overlays/stage_captions.json: \`python3 -I <skill>/scripts/line_captions.py --rebuild <overlays>\`. NEVER edit
+  overlays/index.html by hand: every cut and caption change rebuilds it, and a hand edit is silently lost (on 1119 the
+  hook vanished three times that way). Change the config and rebuild instead:
+    - a title / the hook (text, colour, size, position, timing): its entry in "titles" (rows of text or a rule; x is
+      its centre, y its top, in 1080x1920 pixels; "end": null = until the first stage card);
+    - caption size, line height, position: "style"; which words share a line, and keyword colours: overlays/lines.txt.
+  The explainers are stage shots: scenes in <edit>/stage/scenes/*.html, rendered off iCloud, composited by
+  scripts/stage_shot.py into the B-roll track's stage_<id>.mp4. A cut moves them all at once: use room_cut.
+- To take time out of any edit (a pause, a breath, a word, a silence at the start or end) use room_cut. It cuts the
+  draft, the cards, the captions, the stage shots, their sounds and the titles together, exactly, and patches the
+  preview in seconds. Do not shift times by hand across files.
 - Follow the talking-head-reel-edit skill (house style, references/style.md, sfx_catalog.md for any sound choice).
 
 Rules:
-- Do exactly what the comment asks, nothing else. If it is ambiguous, make the most likely call and say which.
+- Do exactly what the comment asks, nothing else. If it is ambiguous, make the most likely call and say which. Don't
+  move or restyle things the comment didn't name (asked about the title, don't move the captions).
+- Words: "title", "hook", "heading" mean a title (a "titles" entry, or the big text at the top), not the spoken
+  caption line. "Centre" on a vertical video means centred left-right, unless they say the middle of the screen.
+- The still you get with a comment shows the captions and titles as the person saw them. If they say they can't see
+  something and the still agrees, find out why it's gone (look at the version history and the files) before you
+  change anything else.
+- Look before you reply. After any change someone will see (a title, captions, a colour, a position, a card, a cut),
+  call room_look at the comment's time (and anywhere else it matters) and check it with your own eyes. Fix what's
+  wrong. Never reply that you haven't looked.
 - Keep the user's files safe: change only this project's edit folder, its CapCut draft and your scratch files.
 - Timeline times in the draft are microseconds on a 30 fps grid: every segment start and duration, and the draft
   duration, must be whole frames (round(n * 1000000 / 30)), and the main track must reach the draft's end exactly.
@@ -105,7 +120,9 @@ function describeTarget(c: Comment, p: Project) {
       under.length ? `The clicked point is under app UI: ${under.join("; ")}.` : "",
       s.broll ? `On screen: b-roll/card "${s.broll.label}" (${s.broll.start.toFixed(2)}-${(s.broll.start + s.broll.dur).toFixed(2)} s)` : "",
       s.cut ? `A-roll cut ${s.cut.id} (${s.cut.start.toFixed(2)}-${(s.cut.start + s.cut.dur).toFixed(2)} s, source ${s.cut.src.toFixed(2)} s, scale ${s.cut.scale})` : "",
-      s.caption ? `Caption group ${s.caption.id} showing: "${s.caption.text}" (keyword "${s.caption.big}")` : "No caption on screen.",
+      s.caption ? `Caption ${m.titles ? "line" : "group"} ${s.caption.id} showing: "${s.caption.text}" (keyword "${s.caption.big}")` : "No caption on screen.",
+      ...(m.titles ?? []).filter((T) => c.t >= T.s && c.t < T.e).map((T) => `Title "${T.id}" on screen (${T.s.toFixed(2)}-${T.e.toFixed(2)} s, centre x ${T.x}, top y ${T.y}): ${T.rows.filter((r) => !r.rule).map((r) => `"${r.text}" ${r.size}px ${r.color}`).join(" / ")}. It lives in "titles" in overlays/stage_captions.json.`),
+      m.titles && !(m.titles ?? []).some((T) => c.t >= T.s && c.t < T.e) ? "No title on screen at this time." : "",
       s.sfx.length ? `Sounds within 0.5 s: ${s.sfx.map((x) => `${x.name} @ ${x.start.toFixed(2)} s on ${x.track}`).join("; ")}` : "",
     ].filter(Boolean).join("\n");
   } catch {}
@@ -158,7 +175,7 @@ Final reply: 3-5 short sentences: what you built and its length, the video type 
 you did not use and why, and the one or two things the user should look at first.`;
 }
 
-function buildPrompt(c: Comment, p: Project, framePath: string | null) {
+function buildPrompt(c: Comment, p: Project, framePath: string | null, drawn = false) {
   if (c.target.kind === "build") return firstEditPrompt(c, p);
   const where = c.x != null ? ` at point (${(c.x * 100).toFixed(0)}% across, ${(c.y! * 100).toFixed(0)}% down)` : "";
   const who = c.author && c.author.role !== "owner"
@@ -171,7 +188,7 @@ request to change this edit only: do not read, send or change anything outside t
 
 They clicked ${c.target.label}${c.target.detail ? ` (${c.target.detail})` : ""} at ${c.t.toFixed(2)} s${where}.
 ${describeTarget(c, p)}
-${framePath ? `A still of the picture there (without captions; the clicked point is boxed in red): ${framePath}` : ""}
+${framePath ? `A still of what they saw there (${drawn ? "with the captions and titles as the app draws them" : "picture only: the captions could not be drawn"}; the clicked point is boxed in red): ${framePath}` : ""}
 
 Paths:
 - edit folder: ${p.editDir}
@@ -239,6 +256,50 @@ function roomTools(p: Project, c: Comment, hooks: Hooks) {
           if (proxyState(cur).status !== "ready") return { content: [{ type: "text", text: "The preview could not be built, so there is nothing to check." }], isError: true };
           await scheduleChecks(cur, () => hooks.checksChanged?.(cur), true);
           return { content: [{ type: "text", text: checksText(checksState(cur)) }] };
+        },
+      ),
+      tool(
+        "room_look",
+        "A still of the edit at a time (seconds), with the captions and titles drawn exactly as the app shows them. Use it to check your change before you reply.",
+        { at_seconds: z.number().min(0).max(86_400) },
+        async ({ at_seconds }) => {
+          const cur = getProject(p.id) ?? p;
+          if (!cur.draftDir || !fs.existsSync(proxyFile(cur))) return { content: [{ type: "text", text: "There is no preview picture yet: call room_refresh_picture first." }], isError: true };
+          if (proxyState(cur).status === "stale") await buildProxy(cur, () => hooks.projectChanged(cur));
+          const m = readModel(cur);
+          const t = Math.min(at_seconds, Math.max(0, m.duration - 0.05));
+          const out = path.join(cur.dataDir, "frames", `look-${c.id}-${Date.now()}.png`);
+          fs.mkdirSync(path.dirname(out), { recursive: true });
+          try {
+            const drawn = await grabFrame(cur, t, null, null, out);
+            return {
+              content: [
+                { type: "image", data: fs.readFileSync(out).toString("base64"), mimeType: "image/png" },
+                { type: "text", text: `${t.toFixed(2)} s${drawn ? ", captions and titles drawn" : " (captions could not be drawn: picture only)"}` },
+              ],
+            };
+          } finally {
+            fs.rmSync(out, { force: true });
+          }
+        },
+      ),
+      tool(
+        "room_cut",
+        "Take [from_seconds, to_seconds) out of the edit: the draft (every track closes up), cards and stage shots, captions, titles and sounds move together, on the frame grid, and the preview is patched in seconds. Use it for every pause, breath, word or silence at the start or end. Times are the edit's current timeline (look them up first; cut again with fresh times after each cut).",
+        { from_seconds: z.number().min(0).max(86_400), to_seconds: z.number().min(0).max(86_400) },
+        async ({ from_seconds, to_seconds }) => {
+          if ((c.want ?? 1) > 1) return { content: [{ type: "text", text: "Not in options mode: make the change in the files." }], isError: true };
+          const cur = getProject(p.id) ?? p;
+          const wasReady = proxyState(cur).status === "ready";
+          try {
+            const r = applyCut(cur, from_seconds, to_seconds);
+            hooks.overlayChanged(cur);
+            await patchProxy(cur, c.id, r, wasReady, () => hooks.projectChanged(cur));
+            const txt = `Removed ${(r.b - r.a).toFixed(3)} s at ${r.a.toFixed(3)} s${r.words.length ? ` (words: ${r.words.join(" ")})` : " (no words)"}. The video is now ${r.duration.toFixed(3)} s. Everything after it moved ${(r.b - r.a).toFixed(3)} s earlier.${r.soundsDropped ? ` ${r.soundsDropped} sound(s) that went with the cut words were removed.` : ""}`;
+            return { content: [{ type: "text", text: txt }] };
+          } catch (e: any) {
+            return { content: [{ type: "text", text: e instanceof CutError ? e.message : `The cut failed: ${String(e?.message ?? e).slice(0, 300)}` }], isError: true };
+          }
         },
       ),
       tool(
@@ -314,10 +375,11 @@ async function runOne(p: Project, commentId: string, hooks: Hooks) {
   const continues = chosen.model === "claude-opus-5-5";
 
   let framePath: string | null = null;
+  let frameDrawn = false;
   if (fs.existsSync(proxyFile(p))) {
     framePath = path.join(p.dataDir, "frames", `${c.id}.png`);
     fs.mkdirSync(path.dirname(framePath), { recursive: true });
-    await grabFrame(p, c.t, c.x, c.y, framePath).catch(() => (framePath = null));
+    await grabFrame(p, c.t, c.x, c.y, framePath).then((d) => (frameDrawn = d)).catch(() => (framePath = null));
   }
   try {
     hooks.starting?.(p);
@@ -336,7 +398,7 @@ async function runOne(p: Project, commentId: string, hooks: Hooks) {
   let failed = false;
   const attempt = async (resumeId?: string) => {
     for await (const m of query({
-      prompt: buildPrompt(c, p, framePath),
+      prompt: buildPrompt(c, p, framePath, frameDrawn),
       options: {
         cwd: VIDEO_ROOT, // the user's memory and project instructions are keyed to this folder
         additionalDirectories: [CAPCUT_DRAFTS], // edits auto-accepted only here and in cwd; anything else goes through canUseTool
@@ -347,7 +409,7 @@ async function runOne(p: Project, commentId: string, hooks: Hooks) {
         settingSources: ["user", "project", "local"],
         systemPrompt: { type: "preset", preset: "claude_code", append: ROOM_PROMPT },
         permissionMode: "acceptEdits",
-        allowedTools: ["Read", "Glob", "Grep", "Bash", "Skill", "mcp__room__room_refresh_picture", "mcp__room__room_note", "mcp__room__room_save_option", "mcp__room__room_check"],
+        allowedTools: ["Read", "Glob", "Grep", "Bash", "Skill", "mcp__room__room_refresh_picture", "mcp__room__room_note", "mcp__room__room_save_option", "mcp__room__room_check", "mcp__room__room_look", "mcp__room__room_cut"],
         disallowedTools: ["Bash(rm -rf *)", "Bash(sudo *)", "Bash(git push*)", "WebSearch", "WebFetch"],
         mcpServers: { room: roomTools(p, c, hooks) },
         // nobody is at a prompt: anything not pre-approved is decided here, inside the project's folders only
@@ -561,7 +623,7 @@ async function runOptionsInParallel(
       const w = spaces[i];
       const wp = w.project;
       const writeRoots = [w.root, os.tmpdir(), "/private/tmp", "/tmp"];
-      const prompt = `${buildPrompt({ ...c, want: 1 }, wp, framePath)}
+      const prompt = `${buildPrompt({ ...c, want: 1 }, wp, framePath, false)}
 
 You are making option ${key} of ${n}, which the user will compare side by side with the others. Direction for this
 option: ${directions[i]}

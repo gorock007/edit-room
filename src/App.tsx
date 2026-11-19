@@ -688,6 +688,13 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
                     muted={comparing ? listen !== cell.key : false}
                     safe={safe}
                     onVideoEvent={i === 0 ? leaderEvent : followerEvent(i)}
+                    onTitle={
+                      editor && cell.kind === "current" && !comparing && pid
+                        ? async (b) => {
+                            await api.titles(pid, b);
+                          }
+                        : undefined
+                    }
                   />
                   </div>
                 </div>

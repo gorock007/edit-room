@@ -1,6 +1,6 @@
 import { createPortal } from "react-dom";
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
-import type { Comment, Device, EditModel, Pick, Target } from "../types";
+import type { Comment, Device, EditModel, Pick, Target, TitleChange } from "../types";
 import { cx } from "../util";
 import { Composer } from "./Composer";
 import { PLATFORMS, fractions, marginsFor, type Platform, type SafeMode } from "../safezones";
@@ -27,6 +27,8 @@ type Props = {
   /** phone-width window: the comment box opens as a sheet at the bottom of the screen */
   sheet?: boolean;
   onPickDisabled?: boolean;
+  /** editors, on the live edit: move or change a title (the hook) right in the picture */
+  onTitle?: (b: TitleChange) => Promise<void>;
   onVideoEvent: (e: "play" | "pause" | "seeked" | "loaded") => void;
 };
 
@@ -43,6 +45,9 @@ export const Stage = forwardRef<StageHandle, Props>(function Stage(p, ref) {
   const [avail, setAvail] = useState<Box>({ w: 800, h: 450 });
   const [draft, setDraft] = useState<{ x: number; y: number; t: number; target: Target } | null>(null);
   const lastT = useRef(0);
+  const [paused, setPaused] = useState(true);
+  const [boxes, setBoxes] = useState<TitleBox[]>([]);
+  const [editing, setEditing] = useState<string | null>(null);
 
   useLayoutEffect(() => {
     const ro = new ResizeObserver(([e]) => setAvail({ w: e.contentRect.width, h: e.contentRect.height }));
@@ -65,6 +70,33 @@ export const Stage = forwardRef<StageHandle, Props>(function Stage(p, ref) {
   useEffect(() => {
     if (!p.commentMode) setDraft(null);
   }, [p.commentMode]);
+
+  // where each title sits in the picture right now (read from the live composition), so it can be dragged or edited
+  const titlesOn = !!p.onTitle && !!p.model.titles?.length && paused && !p.commentMode;
+  const measure = () => {
+    try {
+      const doc = frame.current?.contentDocument;
+      if (!doc) return setBoxes([]);
+      const out: TitleBox[] = [];
+      doc.querySelectorAll<HTMLElement>(".ttl[data-title]").forEach((el) => {
+        const st = el.ownerDocument.defaultView!.getComputedStyle(el);
+        if (st.visibility === "hidden" || parseFloat(st.opacity) < 0.5) return;
+        const r = el.getBoundingClientRect();
+        out.push({ id: el.dataset.title!, l: r.left, t: r.top, w: r.width, h: r.height });
+      });
+      setBoxes(out);
+    } catch {
+      setBoxes([]);
+    }
+  };
+  useEffect(() => {
+    if (!titlesOn) return setBoxes([]);
+    const id = requestAnimationFrame(() => requestAnimationFrame(measure));
+    return () => cancelAnimationFrame(id);
+  }, [titlesOn, p.time, p.model, p.overlayUrl]);
+  useEffect(() => {
+    if (!titlesOn) setEditing(null);
+  }, [titlesOn]);
 
   const W = p.model.width, H = p.model.height;
   const aspect = W / H;
@@ -107,7 +139,20 @@ export const Stage = forwardRef<StageHandle, Props>(function Stage(p, ref) {
     try {
       const doc = frame.current?.contentDocument;
       const el = doc?.elementFromPoint(x * W, y * H) as HTMLElement | null;
+      // a title (the hook) of a stage-format edit
+      const ttl = el?.closest(".ttl[data-title]") as HTMLElement | null;
+      if (ttl) {
+        const row = el?.closest(".trow") as HTMLElement | null;
+        return { kind: "frame", id: ttl.dataset.title, label: `title “${ttl.dataset.title}” (${(ttl.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 60)})`, detail: row ? `the words "${row.textContent?.trim()}"` : undefined };
+      }
       const word = el?.closest(".w, .big") as HTMLElement | null;
+      // a stage-format caption line (line_captions.py): lines are in time order, ids l0, l1…
+      const line = word?.closest(".line") as HTMLElement | null;
+      if (line && doc) {
+        const i = Array.from(doc.querySelectorAll(".line")).indexOf(line);
+        const g = p.model.captions.find((c) => c.id === `l${i}`);
+        return { kind: "caption", id: `l${i}`, label: `caption line l${i}${g ? ` "${g.text}"` : ""}`, detail: `word "${word!.textContent?.trim()}"` };
+      }
       const grp = word?.closest(".grp") as HTMLElement | null;
       if (grp) {
         const g = p.model.captions.find((c) => c.id === grp.id);
@@ -127,7 +172,9 @@ export const Stage = forwardRef<StageHandle, Props>(function Stage(p, ref) {
     return { kind: "frame", id: c?.id, label: "this spot in the frame", detail: c ? `A-roll ${c.id}${c.scale !== 1 ? `, punch-in ${c.scale}×` : ""}` : undefined };
   };
 
-  const pins = p.comments.filter((c) => c.x != null && Math.abs(c.t - p.time) < 1.2 && c.status !== "undone");
+  // a pin on a title would cover it while it can be dragged; those comments are still in the list
+  const onTitle = (c: Comment) => boxes.some((b) => c.x! * W >= b.l - 20 && c.x! * W <= b.l + b.w + 20 && c.y! * H >= b.t - 20 && c.y! * H <= b.t + b.h + 20);
+  const pins = p.comments.filter((c) => c.x != null && Math.abs(c.t - p.time) < 1.2 && c.status !== "undone" && !(titlesOn && onTitle(c)));
 
   return (
     <div ref={wrap} className="relative flex-1 min-h-0 flex items-center justify-center overflow-hidden">
@@ -149,8 +196,8 @@ export const Stage = forwardRef<StageHandle, Props>(function Stage(p, ref) {
                 playsInline
                 muted={p.muted}
                 preload="auto"
-                onPlay={() => p.onVideoEvent("play")}
-                onPause={() => p.onVideoEvent("pause")}
+                onPlay={() => (setPaused(false), p.onVideoEvent("play"))}
+                onPause={() => (setPaused(true), p.onVideoEvent("pause"))}
                 onSeeked={() => p.onVideoEvent("seeked")}
                 onLoadedData={() => p.onVideoEvent("loaded")}
               />
@@ -161,7 +208,10 @@ export const Stage = forwardRef<StageHandle, Props>(function Stage(p, ref) {
                 key={p.overlayUrl}
                 src={p.overlayUrl}
                 title="captions"
-                onLoad={() => seekOverlay(lastT.current || p.time)}
+                onLoad={() => {
+                  seekOverlay(lastT.current || p.time);
+                  requestAnimationFrame(() => requestAnimationFrame(() => titlesOn && measure()));
+                }}
                 className="pointer-events-none absolute left-0 top-0 origin-top-left border-0 bg-transparent"
                 style={{ width: W, height: H, transform: `scale(${scale})`, colorScheme: "normal" }}
               />
@@ -177,6 +227,27 @@ export const Stage = forwardRef<StageHandle, Props>(function Stage(p, ref) {
             {p.safe && p.safe !== "off" && <SafeOverlay mode={p.safe} width={videoBox.w} />}
             {/* click layer: plays/pauses, or in comment mode drops a pin */}
             <div className={cx("absolute inset-0", p.commentMode ? "cursor-crosshair" : "cursor-pointer")} onClick={pick} />
+            {titlesOn &&
+              boxes.map((b) => {
+                const T = p.model.titles!.find((x) => x.id === b.id);
+                if (!T) return null;
+                return (
+                  <TitleHandle
+                    key={b.id}
+                    box={b}
+                    title={T}
+                    scale={scale}
+                    frameDoc={() => frame.current?.contentDocument ?? null}
+                    editing={editing === b.id}
+                    onEdit={(on) => setEditing(on ? b.id : null)}
+                    onSave={async (ch) => {
+                      await p.onTitle!(ch);
+                      setEditing(null);
+                    }}
+                    below={b.t + b.h < H * 0.55}
+                  />
+                );
+              })}
             {pins.map((c) => (
               <button
                 key={c.id}
@@ -244,6 +315,177 @@ export const Stage = forwardRef<StageHandle, Props>(function Stage(p, ref) {
     </div>
   );
 });
+
+type TitleBox = { id: string; l: number; t: number; w: number; h: number };
+
+const SWATCHES = [
+  { c: "#FFFFFF", n: "White" },
+  { c: "#F2EFE8", n: "Ink" },
+  { c: "#FFD60A", n: "Yellow" },
+  { c: "#E2401C", n: "Red" },
+  { c: "#D9B871", n: "Gold" },
+  { c: "#C9D3D9", n: "Steel" },
+];
+
+/**
+ * A title in the picture, editable in place: drag it to move it, click it for its words, colours and sizes. Changes
+ * show live in the composition and are saved (in stage_captions.json, so no rebuild loses them) on release or Save.
+ */
+function TitleHandle(props: {
+  box: TitleBox;
+  title: import("../types").Title;
+  scale: number;
+  frameDoc: () => Document | null;
+  editing: boolean;
+  below: boolean;
+  onEdit: (on: boolean) => void;
+  onSave: (ch: TitleChange) => Promise<void>;
+}) {
+  const { box, title: T, scale } = props;
+  const [off, setOff] = useState({ x: 0, y: 0 });
+  const [rows, setRows] = useState(() => T.rows.map((r) => ({ text: r.text ?? "", color: r.color ?? "#F2EFE8", size: r.size ?? 46 })));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const drag = useRef<{ x: number; y: number; moved: boolean } | null>(null);
+  useEffect(() => {
+    if (!props.editing) setRows(T.rows.map((r) => ({ text: r.text ?? "", color: r.color ?? "#F2EFE8", size: r.size ?? 46 })));
+  }, [T, props.editing]);
+  useEffect(() => setOff({ x: 0, y: 0 }), [T.x, T.y]);
+
+  const el = () => props.frameDoc()?.querySelector<HTMLElement>(`.ttl[data-title="${CSS.escape(T.id)}"]`) ?? null;
+  /** show a change in the composition at once, before it is saved */
+  const live = (r = rows, o = off) => {
+    const e = el();
+    if (!e) return;
+    e.style.left = `${T.x + o.x}px`;
+    e.style.top = `${T.y + o.y}px`;
+    Array.from(e.children).forEach((c, i) => {
+      const row = T.rows[i], v = r[i];
+      if (!row || !v) return;
+      const h = c as HTMLElement;
+      if (row.rule) h.style.background = v.color;
+      else Object.assign(h.style, { color: v.color, fontSize: `${v.size}px` }), (h.textContent = v.text);
+    });
+  };
+  const save = async (ch: TitleChange) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await props.onSave(ch);
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+      setOff({ x: 0, y: 0 });
+      live(T.rows.map((r) => ({ text: r.text ?? "", color: r.color ?? "#F2EFE8", size: r.size ?? 46 })), { x: 0, y: 0 });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const set = (i: number, v: Partial<(typeof rows)[number]>) => {
+    const next = rows.map((r, k) => (k === i ? { ...r, ...v } : r));
+    setRows(next);
+    live(next);
+  };
+  const cancel = () => {
+    const orig = T.rows.map((r) => ({ text: r.text ?? "", color: r.color ?? "#F2EFE8", size: r.size ?? 46 }));
+    setRows(orig);
+    live(orig, { x: 0, y: 0 });
+    props.onEdit(false);
+  };
+
+  return (
+    <>
+      <div
+        className={cx("absolute z-10 cursor-move rounded-[3px] outline-dashed outline-[1.5px] outline-offset-4 touch-none", props.editing ? "outline-gold" : "outline-gold/60 hover:outline-gold")}
+        style={{ left: (box.l + off.x) * scale, top: (box.t + off.y) * scale, width: box.w * scale, height: box.h * scale }}
+        title="Drag to move · click to change the words and colours"
+        onPointerDown={(e) => {
+          if (busy) return;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          drag.current = { x: e.clientX, y: e.clientY, moved: false };
+        }}
+        onPointerMove={(e) => {
+          const d = drag.current;
+          if (!d) return;
+          const dx = (e.clientX - d.x) / scale, dy = (e.clientY - d.y) / scale;
+          if (!d.moved && Math.hypot(dx, dy) * scale < 4) return;
+          d.moved = true;
+          const o = { x: Math.round(dx), y: Math.round(dy) };
+          setOff(o);
+          live(rows, o);
+        }}
+        onPointerUp={() => {
+          const d = drag.current;
+          drag.current = null;
+          if (!d) return;
+          if (!d.moved) return props.onEdit(!props.editing);
+          save({ id: T.id, x: T.x + off.x, y: T.y + off.y, what: "Moved the title" });
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <span className="absolute -top-6 left-0 whitespace-nowrap rounded bg-gold px-1.5 py-0.5 text-[10px] font-semibold text-ink-950">
+          {busy ? "Saving…" : "Title · drag or click"}
+        </span>
+      </div>
+      {props.editing && (
+        <div
+          className="absolute left-1/2 z-30 w-[min(320px,92%)] -translate-x-1/2 space-y-2 rounded-xl bg-ink-900/95 p-3 text-[12px] text-ink-100 shadow-2xl ring-1 ring-white/10 backdrop-blur"
+          style={props.below ? { top: (box.t + box.h + off.y) * scale + 14 } : { bottom: `calc(100% - ${(box.t + off.y) * scale - 14}px)` }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {T.rows.map((r, i) => (
+            <div key={i} className="space-y-1">
+              {r.rule ? (
+                <div className="text-[11px] text-ink-400">Line</div>
+              ) : (
+                <div className="flex items-center gap-1.5">
+                  <input
+                    value={rows[i].text}
+                    onChange={(e) => set(i, { text: e.target.value })}
+                    className="min-w-0 flex-1 rounded-md bg-ink-800 px-2 py-1 text-ink-50 outline-none ring-1 ring-white/10 focus:ring-gold/60"
+                  />
+                  <button className="h-6 w-6 rounded-md bg-ink-800 ring-1 ring-white/10 hover:bg-ink-700" title="Smaller" onClick={() => set(i, { size: Math.max(12, rows[i].size - 4) })}>−</button>
+                  <span className="w-7 text-center tabular-nums text-ink-300">{rows[i].size}</span>
+                  <button className="h-6 w-6 rounded-md bg-ink-800 ring-1 ring-white/10 hover:bg-ink-700" title="Bigger" onClick={() => set(i, { size: Math.min(400, rows[i].size + 4) })}>+</button>
+                </div>
+              )}
+              <div className="flex gap-1.5">
+                {SWATCHES.map((sw) => (
+                  <button
+                    key={sw.c}
+                    title={sw.n}
+                    onClick={() => set(i, { color: sw.c })}
+                    className={cx("h-5 w-5 rounded-full ring-1 ring-white/20", rows[i].color.toUpperCase() === sw.c && "ring-2 ring-gold ring-offset-1 ring-offset-ink-900")}
+                    style={{ background: sw.c }}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+          {err && <div className="text-red-300">{err}</div>}
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              disabled={busy}
+              className="rounded-md bg-gold px-3 py-1 font-semibold text-ink-950 disabled:opacity-50"
+              onClick={() =>
+                save({ id: T.id, rows: rows.map((r, i) => (T.rows[i].rule ? { color: r.color } : r)), x: T.x + off.x, y: T.y + off.y, what: "Changed the title" })
+              }
+            >
+              {busy ? "Saving…" : "Save"}
+            </button>
+            <button disabled={busy} className="rounded-md px-2 py-1 text-ink-300 hover:text-ink-100" onClick={cancel}>Cancel</button>
+            <button
+              disabled={busy}
+              className="ml-auto rounded-md px-2 py-1 text-red-300/80 hover:text-red-300"
+              onClick={() => confirm("Remove this title from the video?") && save({ id: T.id, remove: true, what: "Removed the title" })}
+            >
+              Remove
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
 
 /** A quiet stand-in for a social feed around the video, so placement reads like it will on a phone. */
 function FeedChrome({ portrait }: { portrait: boolean }) {

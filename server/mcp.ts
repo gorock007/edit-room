@@ -145,7 +145,7 @@ function buildServer(who: Person, d: McpDeps) {
     "look_at_frame",
     {
       title: "Look at a frame",
-      description: "A still of the picture at a time (seconds), from the preview: cuts, punch-ins and cards, without the live captions. Use it to see what a comment is about before writing it.",
+      description: "A still of the edit at a time (seconds): cuts, punch-ins and cards from the preview, with the captions and titles drawn as the app shows them. Use it to see what a comment is about before writing it.",
       inputSchema: { project: id, at_seconds: z.number().min(0).max(86_400) },
       annotations: { readOnlyHint: true },
     },
@@ -159,9 +159,9 @@ function buildServer(who: Person, d: McpDeps) {
       const out = path.join(p.dataDir, "frames", `agent-${crypto.randomBytes(4).toString("hex")}.png`);
       fs.mkdirSync(path.dirname(out), { recursive: true });
       try {
-        await grabFrame(p, t, null, null, out);
+        const drawn = await grabFrame(p, t, null, null, out);
         const data = fs.readFileSync(out).toString("base64");
-        return { content: [{ type: "image" as const, data, mimeType: "image/png" }, { type: "text" as const, text: `${p.id} at ${t.toFixed(2)} s (preview picture, captions not drawn)` }] };
+        return { content: [{ type: "image" as const, data, mimeType: "image/png" }, { type: "text" as const, text: `${p.id} at ${t.toFixed(2)} s (${drawn ? "captions and titles drawn" : "preview picture, captions could not be drawn"})` }] };
       } finally {
         fs.rmSync(out, { force: true });
       }

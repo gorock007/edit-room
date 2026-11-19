@@ -15,6 +15,10 @@ export type Project = {
 export type Seg = { id: string; start: number; dur: number; label: string; file: string; scale: number; src: number };
 export type CapGroup = { id: string; start: number; dur: number; text: string; big: string };
 export type Sfx = { id: string; track: string; start: number; dur: number; src: number; volume: number; file: string; name: string };
+/** A row of a title: a line of text, or a rule (a line that grows). Sizes and positions are pixels of the frame. */
+export type TitleRow = { text?: string; rule?: boolean; size?: number; color?: string; weight?: number; spacing?: number; width?: number; h?: number; mt?: number; mb?: number };
+/** Big text such as the opening hook (stage-format edits): x is its centre, y its top; s/e when it shows. */
+export type Title = { id: string; s: number; e: number; x: number; y: number; rows: TitleRow[] };
 export type EditModel = {
   project: Pick<Project, "id" | "name">;
   duration: number;
@@ -25,6 +29,8 @@ export type EditModel = {
   broll: Seg[];
   captions: CapGroup[];
   sfx: Sfx[];
+  /** null: not a stage-format edit, so titles can't be edited directly */
+  titles: Title[] | null;
   hasOverlay: boolean;
   pictureHash: string;
   /** size + modified time of the media behind the picture: a graphic re-rendered under the same name changes it */
@@ -173,6 +179,7 @@ export function readModel(p: Project): EditModel {
     broll: broll.map((s: any, i: number) => seg(s, i, "broll")),
     captions: p.overlaysDir ? readCaptions(p.overlaysDir) : [],
     sfx,
+    titles: p.overlaysDir ? readTitles(p.overlaysDir) : null,
     hasOverlay: !!p.overlaysDir,
     pictureHash,
     pictureMedia: mediaStamp([...main, ...broll, ...behind].map((s: any) => fixPath(vids.get(s.material_id)?.path ?? "", p.draftDir!))),
@@ -193,6 +200,7 @@ function readCaptions(overlaysDir: string): CapGroup[] {
   const html = fs.readFileSync(path.join(overlaysDir, "index.html"), "utf8");
   const body = html.slice(html.indexOf("<body"), html.indexOf("<script>", html.indexOf("<body")));
   const parts = body.split(/(?=<div class="grp)/).slice(1);
+  if (!parts.length) return lineCaptions(html);
   const strip = (s: string) => s.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
   return parts.flatMap((chunk) => {
     const m = chunk.match(/id="(g\d+)" data-start="([\d.]+)" data-duration="([\d.]+)"/);
@@ -200,6 +208,38 @@ function readCaptions(overlaysDir: string): CapGroup[] {
     const big = chunk.match(/class="big[^"]*"[^>]*>([\s\S]*?)<\/(?:div|span)>/);
     return [{ id: m[1], start: +m[2], dur: +m[3], text: strip(chunk), big: big ? strip(big[1]) : "" }];
   });
+}
+
+/** The titles a stage-format edit shows (as built into index.html, so the times are resolved). */
+function readTitles(overlaysDir: string): Title[] | null {
+  if (!fs.existsSync(path.join(overlaysDir, "stage_captions.json"))) return null;
+  const m = fs.readFileSync(path.join(overlaysDir, "index.html"), "utf8").match(/TITLES = (\[[\s\S]*?\]), Y = /);
+  try {
+    return m ? JSON.parse(m[1]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * A stage-format edit's line captions (the skill's line_captions.py): each line is one caption, ids l0, l1…; the
+ * keywords (selection boxes) are its "big" words.
+ */
+function lineCaptions(html: string): CapGroup[] {
+  const m = html.match(/LINES = (\[[\s\S]*?\]), SPANS = /);
+  if (!m) return [];
+  try {
+    const lines: { s: number; end: number; words: { w: string; kw: string | null }[] }[] = JSON.parse(m[1]);
+    return lines.map((L, i) => ({
+      id: `l${i}`,
+      start: L.s,
+      dur: Math.max(0.02, L.end - L.s),
+      text: L.words.map((w) => w.w).join(" "),
+      big: L.words.filter((w) => w.kw).map((w) => w.w).join(" "),
+    }));
+  } catch {
+    return [];
+  }
 }
 
 export function onScreen(m: EditModel, t: number) {

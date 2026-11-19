@@ -3,6 +3,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { SKILL_DIR, proxyWidth } from "./config.ts";
 import { readModel, type Project } from "./projects.ts";
+import { overlayStill } from "./overlay.ts";
 
 export type ProxyState = { status: "missing" | "ready" | "stale" | "building" | "failed"; builtHash?: string; error?: string; version: number };
 
@@ -72,16 +73,29 @@ export function buildProxy(p: Project, onChange: () => void): Promise<void> {
   return job;
 }
 
-/** A still of the picture at t with the commented point marked, for the agent to look at. */
-export async function grabFrame(p: Project, t: number, x: number | null, y: number | null, out: string) {
+/**
+ * A still of the picture at t with the commented point marked, for the agent to look at. With `overlay` (the default)
+ * the captions and titles are drawn on top as the app shows them; returns whether they were.
+ */
+export async function grabFrame(p: Project, t: number, x: number | null, y: number | null, out: string, overlay = true): Promise<boolean> {
   const m = readModel(p);
   const pw = proxyWidth(m.width, m.height);
-  const vf = [`scale=${pw}:-2`];
-  if (x != null && y != null) {
+  const ov = out.replace(/\.png$/, "") + ".overlay.png";
+  const drawn = overlay && (await overlayStill(p, t, m.width, m.height, ov));
+  const box = x != null && y != null ? (() => {
     const s = 44;
-    vf.push(`drawbox=x=${Math.round(x * pw - s / 2)}:y=ih*${y.toFixed(4)}-${s / 2}:w=${s}:h=${s}:color=red@0.9:t=4`);
+    return `drawbox=x=${Math.round(x * pw - s / 2)}:y=ih*${y.toFixed(4)}-${s / 2}:w=${s}:h=${s}:color=red@0.9:t=4`;
+  })() : null;
+  try {
+    if (drawn)
+      await run("ffmpeg", ["-nostdin", "-v", "error", "-y", "-ss", t.toFixed(3), "-i", proxyFile(p), "-i", ov, "-frames:v", "1",
+        "-filter_complex", `[0:v]scale=${pw}:-2[b];[1:v]scale=${pw}:-2[o];[b][o]overlay=0:0${box ? "," + box : ""}`, out]);
+    else
+      await run("ffmpeg", ["-nostdin", "-v", "error", "-y", "-ss", t.toFixed(3), "-i", proxyFile(p), "-frames:v", "1", "-vf", [`scale=${pw}:-2`, ...(box ? [box] : [])].join(","), out]);
+  } finally {
+    fs.rmSync(ov, { force: true });
   }
-  await run("ffmpeg", ["-nostdin", "-v", "error", "-y", "-ss", t.toFixed(3), "-i", proxyFile(p), "-frames:v", "1", "-vf", vf.join(","), out]);
+  return drawn;
 }
 
 // ---- a direct cut (cut.ts): the preview is patched in a couple of seconds instead of rebuilt in a minute ----

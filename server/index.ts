@@ -22,6 +22,7 @@ import { mcpHandler } from "./mcp.ts";
 import { versionProject } from "./versions.ts";
 import { readUsage } from "./usage.ts";
 import { checksState, scheduleChecks, setOk } from "./checks.ts";
+import { DRIVER } from "./overlay.ts";
 
 const app = express();
 app.set("case sensitive routing", true); // "/API/..." must not reach a route the login gate didn't recognise
@@ -448,6 +449,7 @@ app.post("/api/projects/:id/comments/:cid/pick", withProject((p, req, res) => re
 // ---- the transcript, and cutting words or pauses straight from it (no Claude; see cut.ts) ----
 app.get("/api/projects/:id/transcript", withProject((p, _req, res) => res.json(room.transcript(p))));
 app.post("/api/projects/:id/cut", withProject(async (p, req, res) => res.json(await room.cut(p, me(req), req.body ?? {}))));
+app.post("/api/projects/:id/titles", withProject((p, req, res) => res.json(room.titles(p, me(req), req.body ?? {}))));
 
 // ---- checks: what Edit Room found watching and listening to the preview (checks.ts) ----
 app.get("/api/projects/:id/checks", withProject((p, _req, res) => {
@@ -553,20 +555,7 @@ app.get("/media/:id/file", withProject((p, req, res) => {
   res.sendFile(f);
 }));
 
-// The caption composition, with a tiny time driver injected so the app can seek it frame-exactly.
-const DRIVER = `<script>
-window.__timelines = window.__timelines || {};
-window.__room = {
-  seek(t) {
-    for (const el of document.querySelectorAll('.clip')) {
-      const s = +el.dataset.start, d = +el.dataset.duration;
-      el.style.visibility = t >= s && t < s + d ? 'visible' : 'hidden';
-    }
-    const tl = window.__timelines.main || Object.values(window.__timelines)[0];
-    if (tl) tl.seek(t, false);
-  }
-};
-</script>`;
+// The caption composition, with the time driver injected (overlay.ts) so the app can seek it frame-exactly.
 app.get("/overlay/:id/{*rest}", withProject((p, req, res) => {
   let rest = ([] as string[]).concat((req.params as any).rest ?? []).join("/") || "index.html";
   let dir = p.overlaysDir;
