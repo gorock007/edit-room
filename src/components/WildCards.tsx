@@ -192,7 +192,7 @@ function Md({ text, onSeek }: { text: string; onSeek: (t: number) => void }) {
 
 // ---- the view ----
 
-export function WildCards({ narrow, tick, onClose, onError }: { narrow: boolean; tick: number; onClose: () => void; onError: (e: string) => void }) {
+export function WildCards({ narrow, tick, owner, onClose, onError }: { narrow: boolean; tick: number; owner: boolean; onClose: () => void; onError: (e: string) => void }) {
   const [list, setList] = useState<WildList | null>(null);
   const [filter, setFilter] = useState<Filter>("new");
   const [sel, setSel] = useState<string | null>(() => new URLSearchParams(location.hash.slice(1)).get("card"));
@@ -357,7 +357,7 @@ export function WildCards({ narrow, tick, onClose, onError }: { narrow: boolean;
           {d.summary?.why && <p className="mt-3 rounded-lg bg-gold/[0.07] px-3 py-2.5 text-[13px] leading-relaxed text-ink-100 ring-1 ring-gold/20">{d.summary.why}</p>}
           {d.summary?.seen_before && <p className="mt-2 text-[11px] text-ink-500">Studied before: {d.summary.seen_before}</p>}
 
-          {d.state === "ready" && <Actions d={d} running={running} onDecide={decide} onError={onError} onDone={load} />}
+          {d.state === "ready" && <Actions d={d} running={running} owner={owner} onDecide={decide} onError={onError} onDone={load} />}
 
           {job && job.status !== "done" && (
             <div className={cx("mt-3 flex items-center gap-2 rounded-md px-3 py-2 text-[12px]", running ? "bg-gold/10 text-gold" : "bg-red-500/10 text-red-300")}>
@@ -367,7 +367,7 @@ export function WildCards({ narrow, tick, onClose, onError }: { narrow: boolean;
                   ? `${job.kind === "plan" ? `Planning idea ${job.idea}` : `Making the template "${job.slug}"`}… started ${ago(job.started)}, usually 3-5 min.`
                   : `${job.kind === "plan" ? "Planning" : "Making the template"} failed: ${job.error ?? "unknown error"}`}
               </span>
-              {running && (
+              {running && owner && (
                 <button onClick={() => api.wildStop(d.id).catch((e) => onError(e.message))} className="rounded px-2 py-0.5 text-ink-200 ring-1 ring-white/10 hover:bg-white/5">
                   Stop
                 </button>
@@ -393,7 +393,7 @@ export function WildCards({ narrow, tick, onClose, onError }: { narrow: boolean;
               </div>
               <div className="py-2">
                 {tab === "breakdown" && (d.breakdown ? <Md text={d.breakdown} onSeek={seek} /> : <p className="py-4 text-[13px] text-ink-400">No breakdown.md in this folder.</p>)}
-                {tab === "ideas" && <Ideas d={d} running={running} onError={onError} onDone={load} onOpen={(n) => setTab(`plan-${n}`)} />}
+                {tab === "ideas" && <Ideas d={d} running={running} owner={owner} onError={onError} onDone={load} onOpen={(n) => setTab(`plan-${n}`)} />}
                 {tab.startsWith("plan-") && <Md text={d.planText[tab.slice(5)] ?? ""} onSeek={seek} />}
                 {tab === "template" && d.templateText && (
                   <>
@@ -456,7 +456,7 @@ function Numbers({ d }: { d: WildDetail }) {
   );
 }
 
-function Actions({ d, running, onDecide, onError, onDone }: { d: WildDetail; running: boolean; onDecide: (s: "new" | "reference" | "dismissed") => void; onError: (e: string) => void; onDone: () => void }) {
+function Actions({ d, running, owner, onDecide, onError, onDone }: { d: WildDetail; running: boolean; owner: boolean; onDecide: (s: "new" | "reference" | "dismissed") => void; onError: (e: string) => void; onDone: () => void }) {
   const [making, setMaking] = useState(false);
   const [name, setName] = useState("");
   const [note, setNote] = useState("");
@@ -464,7 +464,7 @@ function Actions({ d, running, onDecide, onError, onDone }: { d: WildDetail; run
   return (
     <div className="mt-3">
       <div className="flex flex-wrap gap-2">
-        {d.template ? (
+        {!owner ? null : d.template ? (
           <span className="rounded-md bg-cut/10 px-2.5 py-1.5 text-[12px] text-cut">Template: {d.template}</span>
         ) : (
           <button onClick={() => setMaking((m) => !m)} disabled={running} className={cx(btn, "bg-gold text-ink-950 ring-0 hover:bg-gold/90 font-medium")}>
@@ -514,7 +514,7 @@ function Actions({ d, running, onDecide, onError, onDone }: { d: WildDetail; run
   );
 }
 
-function Ideas({ d, running, onError, onDone, onOpen }: { d: WildDetail; running: boolean; onError: (e: string) => void; onDone: () => void; onOpen: (n: number) => void }) {
+function Ideas({ d, running, owner, onError, onDone, onOpen }: { d: WildDetail; running: boolean; owner: boolean; onError: (e: string) => void; onDone: () => void; onOpen: (n: number) => void }) {
   const [open, setOpen] = useState<number | null>(null);
   const [note, setNote] = useState("");
   const ideas = d.summary?.ideas ?? [];
@@ -541,7 +541,7 @@ function Ideas({ d, running, onError, onDone, onOpen }: { d: WildDetail; running
                   Open plan
                 </button>
               )}
-              {busy ? (
+              {!owner ? null : busy ? (
                 <span className="flex items-center gap-1.5 px-2 text-[12px] text-gold"><span className="h-1.5 w-1.5 rounded-full bg-gold pulse-ring" />Planning…</span>
               ) : (
                 <button onClick={() => setOpen(open === n ? null : n)} disabled={running} className="rounded-md px-2.5 py-1 text-[12px] text-ink-200 ring-1 ring-white/10 hover:bg-white/5 disabled:opacity-40">

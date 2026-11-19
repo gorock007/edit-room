@@ -634,7 +634,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
       )}
 
       {wild && startsEdits ? (
-        <WildCards narrow={narrow} tick={wildTick} onClose={closeWild} onError={setError} />
+        <WildCards narrow={narrow} tick={wildTick} owner={me.role === "owner"} onClose={closeWild} onError={setError} />
       ) : (
       <div className={cx("flex min-h-0 flex-1", narrow && "flex-col overflow-y-auto")}>
         <main className={cx("flex min-w-0 flex-col", narrow ? (comparing || !model ? "" : "sticky top-0 z-30 bg-ink-950") : "flex-1 overflow-y-auto")}>

@@ -618,15 +618,15 @@ app.post("/api/wildcards/:id/decision", need("editor"), wildOk, wild((req, res) 
   res.json(setDecision(String(req.params.id), state, me(req).name));
   wildChanged();
 }));
-app.post("/api/wildcards/:id/plan", need("editor"), wildOk, wild((req, res) => {
+app.post("/api/wildcards/:id/plan", need("owner"), wild((req, res) => {
   startPlan(String(req.params.id), Number(req.body?.idea), req.body?.note, wildChanged);
   res.json({ ok: true });
 }));
-app.post("/api/wildcards/:id/template", need("editor"), wildOk, wild((req, res) => {
+app.post("/api/wildcards/:id/template", need("owner"), wild((req, res) => {
   startTemplate(String(req.params.id), req.body?.name, req.body?.note, wildChanged);
   res.json({ ok: true });
 }));
-app.post("/api/wildcards/:id/stop", need("editor"), wildOk, wild((req, res) => {
+app.post("/api/wildcards/:id/stop", need("owner"), wild((req, res) => {
   stopWildJob(String(req.params.id));
   res.json({ ok: true });
 }));
