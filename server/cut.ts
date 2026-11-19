@@ -71,10 +71,26 @@ export function rebuildStageCaptions(p: Project): string | null {
 }
 const sha = (f: string) => crypto.createHash("sha256").update(fs.readFileSync(f)).digest("hex");
 const readJson = (f: string) => JSON.parse(fs.readFileSync(f, "utf8"));
-const writeJson = (f: string, v: unknown, indent?: number) => {
-  fs.writeFileSync(f + ".tmp", JSON.stringify(v, null, indent));
-  fs.renameSync(f + ".tmp", f);
+/**
+ * Write a file whole: into a new temp file beside it (random name, created exclusively, so a link planted there is
+ * never followed), then renamed over it.
+ */
+const writeAtomic = (f: string, data: string) => {
+  const tmp = `${f}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+  const fd = fs.openSync(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), 0o644);
+  try {
+    fs.writeSync(fd, data);
+  } finally {
+    fs.closeSync(fd);
+  }
+  try {
+    fs.renameSync(tmp, f);
+  } catch (e) {
+    fs.rmSync(tmp, { force: true });
+    throw e;
+  }
 };
+const writeJson = (f: string, v: unknown, indent?: number) => writeAtomic(f, JSON.stringify(v, null, indent));
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 const r4 = (n: number) => Math.round(n * 10000) / 10000;
 
@@ -348,7 +364,7 @@ export function applyCut(p: Project, a0: number, b0: number): CutResult {
     }
     writeJson(draftFile, d);
     writeJson(sw.file, keep, 1);
-    fs.writeFileSync(linesFile, rows.join("\n") + "\n");
+    writeAtomic(linesFile, rows.join("\n") + "\n");
     if (shots && shotsFile) writeJson(shotsFile, shots, 1);
     if (sfxNew) writeJson(sfxFile, sfxNew, 1);
     for (const [f, v] of side) if (path.resolve(f) !== path.resolve(sw.file)) writeJson(f, v);

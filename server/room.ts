@@ -385,8 +385,14 @@ export function makeRoom(e: Emitters) {
       try {
         outside(p);
         snapshot(p, cid);
-        fs.writeFileSync(cfgFile + ".tmp", JSON.stringify(cfg, null, 1));
-        fs.renameSync(cfgFile + ".tmp", cfgFile);
+        const tmp = `${cfgFile}.${newId()}.tmp`;
+        const fd = fs.openSync(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), 0o644);
+        try {
+          fs.writeSync(fd, JSON.stringify(cfg, null, 1));
+        } finally {
+          fs.closeSync(fd);
+        }
+        fs.renameSync(tmp, cfgFile);
         const why = rebuildStageCaptions(p);
         if (why) {
           restore(p, cid, changedSince(p, cid));
