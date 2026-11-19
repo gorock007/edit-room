@@ -447,7 +447,13 @@ const shotN = (req: express.Request) => {
   return n;
 };
 const shotErr = (res: express.Response, e: any) => res.status(e instanceof ShotError || e instanceof RoomError ? e.status : 500).json({ error: String(e?.message ?? e) });
-app.get("/api/projects/:id/shots", need("editor"), withProject((p, _req, res) => res.json(hasShots(p) ? listShots(p) : { shots: [], story: null, style: null, total: 0 })));
+app.get("/api/projects/:id/shots", need("editor"), withProject((p, req, res) => {
+  if (!hasShots(p)) return res.json({ shots: [], story: null, style: null, total: 0 });
+  const l = listShots(p);
+  // folder paths on this Mac only for people with every project (like the clip browser); others get file names
+  if (!shotOk(req)) l.shots = l.shots.map((s) => ({ ...s, file: s.name }));
+  res.json(l);
+}));
 app.get("/media/:id/shot/:i", need("editor"), withProject((p, req, res) => {
   const f = shotThumb(p, shotN(req));
   if (!f) return res.status(404).end();
