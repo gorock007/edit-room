@@ -266,7 +266,7 @@ for (const wss of sockets)
     if (!who) return ws.close(4401, "login required");
     const peer: Peer = { sid: newId(), person: who.id, project: null, t: 0, playing: false, at: Date.now() };
     peers.set(ws, peer);
-    ws.send(JSON.stringify({ type: "hello", sid: peer.sid }));
+    ws.send(JSON.stringify({ type: "hello", sid: peer.sid, build: currentBuild() }));
     ws.on("message", (raw) => {
       let m: any;
       try {
@@ -758,6 +758,18 @@ app.get("/media/wild/:id/{*rest}", need("editor"), wildOk, wild((req, res) => {
   if (!f) return res.status(404).end();
   res.sendFile(f);
 }));
+
+/** Which build of the app is in dist (its script's hash), so pages opened before a rebuild can offer a reload. */
+function currentBuild(): string | null {
+  try {
+    return fs.readFileSync(path.join(dist, "index.html"), "utf8").match(/\/assets\/index-([\w-]+)\.js/)?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+chokidar
+  .watch(path.join(dist, "index.html"), { ignoreInitial: true, awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 } })
+  .on("all", () => send({ type: "build", build: currentBuild() }));
 
 // the built app (what the phone loads; `npm run dev` keeps it rebuilt)
 app.use(express.static(dist, { index: false }));

@@ -19,6 +19,9 @@ import { ShotsPanel } from "./components/ShotsPanel";
 import { ExportMenu } from "./components/ExportMenu";
 import { SAFE_LABEL, modesFor, type SafeMode } from "./safezones";
 
+/** This page's build (hash of its script); null under the dev server, which updates itself. */
+const BUILD = document.querySelector<HTMLScriptElement>('script[type="module"][src*="/assets/index-"]')?.src.match(/index-([\w-]+)\.js/)?.[1] ?? null;
+
 const store = {
   get: (k: string) => {
     try {
@@ -82,6 +85,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
   const [side, setSide] = useState<"comments" | "words" | "checks" | "shots" | "history">("comments");
   // montage edits (wild card templates) have a shot list that can be swapped like a CapCut template
   const [hasShots, setHasShots] = useState(false);
+  const [updated, setUpdated] = useState(false);
   // version history, and the version being compared side by side with the current edit
   const [history, setHistory] = useState<{ versions: VersionInfo[]; current: number | null }>({ versions: [], current: null });
   const [compareVer, setCompareVer] = useState<number | null>(null);
@@ -292,6 +296,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
   }, []);
 
   const { online, send } = useSocket((m) => {
+    if ((m.type === "hello" || m.type === "build") && m.build && BUILD && m.build !== BUILD) setUpdated(true);
     if (m.type === "wildcards") setWildTick((t) => t + 1);
     if (m.type === "presence") setPresence(m.people);
     if (m.type === "me") onMeChanged(); // the owner changed my role or projects
@@ -629,6 +634,11 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
           {editor && proxy?.status === "stale" && (
             <button onClick={() => pid && api.rebuild(pid)} className="rounded-md px-2 py-1 text-gold ring-1 ring-gold/30 hover:bg-gold/10">
               {narrow ? "Rebuild" : "Picture changed · rebuild"}
+            </button>
+          )}
+          {updated && (
+            <button onClick={() => location.reload()} className="rounded-md bg-gold px-2 py-1 font-medium text-ink-950 hover:bg-gold/90" title="Edit Room changed since this page opened: reload to use the new version">
+              {narrow ? "Reload" : "Edit Room updated · Reload"}
             </button>
           )}
           <span className={cx("flex items-center gap-1.5", busy ? "text-gold" : "text-ink-400")}>

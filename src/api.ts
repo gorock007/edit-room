@@ -120,7 +120,8 @@ export const api = {
 };
 
 type Msg =
-  | { type: "hello"; sid: string }
+  | { type: "hello"; sid: string; build?: string | null }
+  | { type: "build"; build: string | null }
   | { type: "comment"; comment: Comment }
   | { type: "project"; id: string; proxy: ProxyState }
   | { type: "overlay"; id: string; at: number }
