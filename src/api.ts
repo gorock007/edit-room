@@ -19,7 +19,18 @@ const plain = async <T,>(r: Response): Promise<T> => {
 const send = (method: string, url: string, body: unknown) => fetch(url, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 const postJson = (url: string, body: unknown) => send("POST", url, body);
 
-export type TemplateInfo = { slug: string; title: string; from: string | null; needs: string | null; useWhen: string | null };
+export type TemplateInfo = { slug: string; title: string; from: string | null; needs: string | null; useWhen: string | null; track: string | null; line: string | null };
+export type Track = {
+  path: string;
+  name: string;
+  folder: string;
+  lengthS: number | null;
+  bpm: number | null;
+  lufs: number | null;
+  firstBeatS: number | null;
+  from: { handle: string | null; link: string | null; kind: string | null } | null;
+  note: string | null;
+};
 
 export type Me = { remote: boolean; authed: boolean; hasPassword: boolean; person: (Person & { projects: "all" | string[] }) | null; publicUrl: string | null };
 
@@ -28,7 +39,7 @@ export const api = {
   wildcard: (id: string) => fetch(`/api/wildcards/${encodeURIComponent(id)}`).then(j<WildDetail>),
   wildDecision: (id: string, state: "new" | "reference" | "dismissed") => postJson(`/api/wildcards/${encodeURIComponent(id)}/decision`, { state }).then(j),
   wildPlan: (id: string, idea: number, note: string) => postJson(`/api/wildcards/${encodeURIComponent(id)}/plan`, { idea, note }).then(j),
-  wildTemplate: (id: string, name: string, note: string) => postJson(`/api/wildcards/${encodeURIComponent(id)}/template`, { name, note }).then(j),
+  wildTemplate: (id: string, name: string, note: string, exact = false) => postJson(`/api/wildcards/${encodeURIComponent(id)}/template`, { name, note, exact }).then(j),
   wildStop: (id: string) => postJson(`/api/wildcards/${encodeURIComponent(id)}/stop`, {}).then(j),
   me: () => fetch("/api/me").then(j<Me>),
   login: (password: string) => postJson("/api/login", { password }).then(plain),
@@ -62,7 +73,10 @@ export const api = {
   raw: (id: string) => fetch(`/api/projects/${id}/raw`).then(j<RawInfo>),
   startUpload: (id: string, name: string, size: number, dest: Dest = "raw") =>
     postJson(`/api/projects/${id}/uploads`, { name, size, dest }).then(j<{ key: string; name: string; size: number; received: number; done: boolean }>),
-  build: (id: string, note: string, format: Format, folders: string[], style: string | null) => postJson(`/api/projects/${id}/build`, { note, format, folders, style }).then(j<Comment>),
+  build: (id: string, note: string, format: Format, folders: string[], style: string | null, music: string | null) =>
+    postJson(`/api/projects/${id}/build`, { note, format, folders, style, music }).then(j<Comment>),
+  music: () => fetch("/api/music").then(j<{ tracks: Track[]; measuring: number }>),
+  musicUrl: (p: string) => `/media/music/${p.split("/").map(encodeURIComponent).join("/")}`,
   templates: () => fetch("/api/templates").then(j<TemplateInfo[]>),
   libraryFolders: () => fetch("/api/library-folders").then(j<LibraryFolder[]>),
   exportState: (id: string) => fetch(`/api/projects/${id}/export`).then(j<ExportState>),
@@ -91,7 +105,8 @@ type Msg =
   | { type: "checks"; id: string; checks: Checks }
   | { type: "me" }
   | { type: "people" }
-  | { type: "wildcards"; at: number };
+  | { type: "wildcards"; at: number }
+  | { type: "music"; at: number };
 
 /** One socket for the whole app; reconnects on its own. `send` drops messages while it is reconnecting. */
 export function useSocket(onMsg: (m: Msg) => void) {

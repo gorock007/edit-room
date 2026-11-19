@@ -192,7 +192,15 @@ function Md({ text, onSeek }: { text: string; onSeek: (t: number) => void }) {
 
 // ---- the view ----
 
-export function WildCards({ narrow, tick, owner, onClose, onError }: { narrow: boolean; tick: number; owner: boolean; onClose: () => void; onError: (e: string) => void }) {
+export function WildCards({ narrow, tick, owner, onClose, onError, onUse }: {
+  narrow: boolean;
+  tick: number;
+  owner: boolean;
+  onClose: () => void;
+  onError: (e: string) => void;
+  /** start a new edit in this template */
+  onUse: (slug: string) => void;
+}) {
   const [list, setList] = useState<WildList | null>(null);
   const [filter, setFilter] = useState<Filter>("new");
   const [sel, setSel] = useState<string | null>(() => new URLSearchParams(location.hash.slice(1)).get("card"));
@@ -357,7 +365,9 @@ export function WildCards({ narrow, tick, owner, onClose, onError }: { narrow: b
           {d.summary?.why && <p className="mt-3 rounded-lg bg-gold/[0.07] px-3 py-2.5 text-[13px] leading-relaxed text-ink-100 ring-1 ring-gold/20">{d.summary.why}</p>}
           {d.summary?.seen_before && <p className="mt-2 text-[11px] text-ink-500">Studied before: {d.summary.seen_before}</p>}
 
-          {d.state === "ready" && <Actions d={d} running={running} owner={owner} onDecide={decide} onError={onError} onDone={load} />}
+          {d.state === "ready" && (
+            <Actions d={d} running={running} owner={owner} live={!!d.template && !!list?.templates.includes(d.template)} onUse={onUse} onDecide={decide} onError={onError} onDone={load} />
+          )}
 
           {job && job.status !== "done" && (
             <div className={cx("mt-3 flex items-center gap-2 rounded-md px-3 py-2 text-[12px]", running ? "bg-gold/10 text-gold" : "bg-red-500/10 text-red-300")}>
@@ -398,7 +408,12 @@ export function WildCards({ narrow, tick, owner, onClose, onError }: { narrow: b
                 {tab === "template" && d.templateText && (
                   <>
                     <p className="mb-2 text-[11px] text-ink-500">
-                      Saved as <code className="font-mono text-ink-300">Video Editor/templates/{d.template}</code>. Pick it for a new edit to use this look.
+                      Saved as <code className="font-mono text-ink-300">Video Editor/templates/{d.template}</code>.{" "}
+                      {d.template && list?.templates.includes(d.template) ? (
+                        <button onClick={() => onUse(d.template!)} className="text-gold underline-offset-2 hover:underline">Make one like this →</button>
+                      ) : (
+                        "It has been deleted."
+                      )}
                     </p>
                     <Md text={d.templateText} onSeek={seek} />
                   </>
@@ -456,16 +471,30 @@ function Numbers({ d }: { d: WildDetail }) {
   );
 }
 
-function Actions({ d, running, owner, onDecide, onError, onDone }: { d: WildDetail; running: boolean; owner: boolean; onDecide: (s: "new" | "reference" | "dismissed") => void; onError: (e: string) => void; onDone: () => void }) {
+function Actions({ d, running, owner, live, onUse, onDecide, onError, onDone }: {
+  d: WildDetail;
+  running: boolean;
+  owner: boolean;
+  live: boolean;
+  onUse: (slug: string) => void;
+  onDecide: (s: "new" | "reference" | "dismissed") => void;
+  onError: (e: string) => void;
+  onDone: () => void;
+}) {
   const [making, setMaking] = useState(false);
+  const [exact, setExact] = useState(false);
   const [name, setName] = useState("");
   const [note, setNote] = useState("");
   const btn = "rounded-md px-2.5 py-1.5 text-[12px] ring-1 ring-white/10 hover:bg-white/5 disabled:opacity-40";
   return (
     <div className="mt-3">
       <div className="flex flex-wrap gap-2">
-        {!owner ? null : d.template ? (
-          <span className="rounded-md bg-cut/10 px-2.5 py-1.5 text-[12px] text-cut">Template: {d.template}</span>
+        {d.template && live ? (
+          <button onClick={() => onUse(d.template!)} className={cx(btn, "bg-gold text-ink-950 ring-0 hover:bg-gold/90 font-medium")} title={`New edit in the "${d.template}" template`}>
+            Make one like this
+          </button>
+        ) : !owner ? null : d.template ? (
+          <span className="rounded-md bg-cut/10 px-2.5 py-1.5 text-[12px] text-cut">Template: {d.template} (deleted)</span>
         ) : (
           <button onClick={() => setMaking((m) => !m)} disabled={running} className={cx(btn, "bg-gold text-ink-950 ring-0 hover:bg-gold/90 font-medium")}>
             Make template
@@ -490,7 +519,7 @@ function Actions({ d, running, owner, onDecide, onError, onDone }: { d: WildDeta
           onSubmit={(e) => {
             e.preventDefault();
             api
-              .wildTemplate(d.id, name, note)
+              .wildTemplate(d.id, name, note, exact)
               .then(() => {
                 setMaking(false);
                 onDone();
@@ -499,11 +528,15 @@ function Actions({ d, running, owner, onDecide, onError, onDone }: { d: WildDeta
           }}
         >
           <p className="text-[12px] leading-relaxed text-ink-400">
-            Claude writes the look as rules (pace, layout, screenshots, animation, colours in your grade, fonts, captions, a "never do" list) into Video Editor/templates. It
-            stays opt-in: your house style is still the default.
+            Claude writes the look as rules (pace, layout, screenshots, animation, {exact ? "the original's colours and logo" : "colours in your grade"}, fonts, captions, a "never do" list)
+            into Video Editor/templates. It stays opt-in: your house style is still the default.
           </p>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder={d.summary?.title ? `Name (e.g. "${d.summary.title.split(" ").slice(0, 3).join(" ")}")` : "Name"} className="w-full rounded-md bg-ink-900 px-2.5 py-1.5 text-[16px] text-ink-100 outline-none ring-1 ring-white/10 focus:ring-gold/50 md:text-[13px]" />
           <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Anything to keep or change? (optional)" className="w-full resize-none rounded-md bg-ink-900 px-2.5 py-1.5 text-[16px] text-ink-100 outline-none ring-1 ring-white/10 focus:ring-gold/50 md:text-[13px]" />
+          <label className="flex items-center gap-2 text-[12px] text-ink-300">
+            <input type="checkbox" checked={exact} onChange={(e) => setExact(e.target.checked)} className="accent-[var(--color-gold)]" />
+            Copy the look exactly (the original's colours, logo and font) instead of adapting it to yours
+          </label>
           <div className="flex justify-end gap-2">
             <button type="button" onClick={() => setMaking(false)} className="rounded-md px-2.5 py-1.5 text-[12px] text-ink-400 hover:text-ink-200">Cancel</button>
             <button className="rounded-md bg-gold px-3 py-1.5 text-[12px] font-medium text-ink-950 hover:bg-gold/90">Make it</button>

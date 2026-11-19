@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { VIDEO_ROOT, inside } from "./config.ts";
+import { musicFile } from "./music.ts";
 
 /**
  * Wild cards: reels the user shared from their phone, broken down by the reel-breakdown skill (its inbox watcher
@@ -182,7 +183,7 @@ export function wildFile(id: string, rest: string): string | null {
   return inside(f, [dir]) && fs.existsSync(f) ? f : null;
 }
 
-export type TemplateInfo = { slug: string; title: string; from: string | null; needs: string | null; useWhen: string | null };
+export type TemplateInfo = { slug: string; title: string; from: string | null; needs: string | null; useWhen: string | null; track: string | null; line: string | null };
 export function listTemplates(): TemplateInfo[] {
   try {
     return fs
@@ -192,7 +193,16 @@ export function listTemplates(): TemplateInfo[] {
         const text = fs.readFileSync(path.join(TEMPLATES_DIR, e.name, "style.md"), "utf8");
         const title = text.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? e.name;
         const line = (k: string) => text.match(new RegExp(`^${k}:\\s*(.+)$`, "im"))?.[1]?.trim().slice(0, 400) ?? null;
-        return { slug: e.name, title, from: line("based on"), needs: line("needs"), useWhen: line("use when") };
+        // the template's own track (a path in the music bank), when it has one
+        let track: string | null = null;
+        let onScreen: string | null = null;
+        try {
+          const tok = JSON.parse(fs.readFileSync(path.join(TEMPLATES_DIR, e.name, "tokens.json"), "utf8"));
+          track = typeof tok?.sound?.track === "string" && musicFile(tok.sound.track) ? tok.sound.track : null;
+          // the line a template puts on screen by default (prefills New edit's note)
+          onScreen = typeof tok?.notice?.text === "string" ? tok.notice.text.slice(0, 120) : null;
+        } catch {}
+        return { slug: e.name, title, from: line("based on"), needs: line("needs"), useWhen: line("use when"), track, line: onScreen };
       });
   } catch {
     return [];
@@ -318,7 +328,7 @@ export function startPlan(id: string, idea: number, note: unknown, onChange: () 
   startJob(id, { kind: "plan", status: "running", started: Date.now(), idea }, prompt, [`Write(${rule})`, `Edit(${rule})`], onChange);
 }
 
-export function startTemplate(id: string, name: unknown, note: unknown, onChange: () => void) {
+export function startTemplate(id: string, name: unknown, note: unknown, onChange: () => void, exact = false) {
   const dir = folderOf(id);
   const c = card(id);
   if (c.state !== "ready") throw new WildError(409, "The breakdown isn't ready yet.");
@@ -328,11 +338,15 @@ export function startTemplate(id: string, name: unknown, note: unknown, onChange
   const tdir = path.join(TEMPLATES_DIR, slug);
   fs.mkdirSync(path.join(tdir, "refs"), { recursive: true });
   const n = clean(note, 600);
+  // the reel's music, if the watcher saved it to the bank (save_music.py)
+  const saved = readJson<{ saved?: string | null }>(path.join(dir, "music.json"))?.saved ?? null;
   const prompt = [
     `Make a wild card template from the reel broken down in ${dir}.`,
     "Read breakdown.md, measure.md, measure.json and summary.json there, look at the frames that show the look best,",
     "and read the user's memory index (~/.claude/projects/-Users-gorock-Library-Mobile-Documents-com-apple-CloudDocs-Video-Editor/memory/MEMORY.md)",
-    "and the notes on references (adapt, don't copy), their fonts and colours, safe-zone centring and their SFX library.",
+    exact
+      ? "and the notes on their fonts and safe zones. The user asked for an EXACT COPY of this reel's look: keep the original's colours, logo/icon, font style and placement (measure them from the frames), say so near the top of style.md, and put \"mode\": \"exact copy\" in tokens.json. Fonts: the closest one they have installed."
+      : "and the notes on references (adapt, don't copy), their fonts and colours, safe-zone centring and their SFX library.",
     "The user's own brief for this file:",
     '> Turn these patterns into a style template file that you\'ll follow every time you edit or plan a video for me. Write it as clear rules, not descriptions:',
     "> pace, layout, where screenshots go, animation style, colours, fonts, captions. Include a short \"never do\" list. Keep it under one page.",
@@ -342,7 +356,10 @@ export function startTemplate(id: string, name: unknown, note: unknown, onChange
     "  needs: <what the user must record or gather for a video in this style>",
     "  use when: <one line>",
     "Rules carry numbers where the breakdown measured them (shot length, picture changes per second, wpm, caption y and size, loudness).",
-    "Colours must fit the user's grade and their own palette, not the creator's; fonts must be ones they have or say which to get.",
+    exact ? "" : "Colours must fit the user's grade and their own palette, not the creator's; fonts must be ones they have or say which to get.",
+    saved
+      ? `The reel's music is saved in the user's music bank as "${saved}" (background music/catalog.json has its BPM, beat times and hits): make it the template's default track (tokens.json "sound": {"track": "${saved}"}) and state pace in beats of it.`
+      : "",
     `Also write ${tdir}/tokens.json: {"canvas", "pace": {"avg_shot_s", "changes_per_s", "wpm"}, "colours": {name: hex}, "fonts": {...},`,
     '"captions": {"y", "size_px", "words_per_line", "case", "highlight"}, "sound": {"music_bed", "sfx", "lufs"}}.',
     `List the 4-6 frames that show the look best in ${tdir}/refs.txt, one file name from frames/ per line (Edit Room copies them).`,

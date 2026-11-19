@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { Comment, Dest, Format, LibraryFolder, RawInfo } from "../types";
-import type { TemplateInfo } from "../api";
+import type { TemplateInfo, Track } from "../api";
 import { cx } from "../util";
 import { keepAwake, uploadFile } from "../upload";
 
@@ -11,6 +11,7 @@ const size = (n: number) => (n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(2)} GB`
 const ACCEPT = "video/*,audio/*,.mts,.m2ts,.mxf,.mkv";
 const ACCEPT_EXTRA = ACCEPT + ",image/*,.heic";
 const FORMAT_KEY = "room.newedit.format";
+const mmss = (s: number | null) => (s == null ? "" : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`);
 const lastFormat = (): Format => {
   try {
     return localStorage.getItem(FORMAT_KEY) === "16:9" ? "16:9" : "9:16";
@@ -24,8 +25,10 @@ const lastFormat = (): Format => {
  * recordings, screenshots), pick the format, and Claude builds the whole first edit without asking anything.
  * `projectId` is null until the first file is picked; the "<MMDD> edit" folder is made then, not on a click.
  */
-export function NewEdit({ projectId, comments, narrow, onCreated, onError }: {
+export function NewEdit({ projectId, preset, comments, narrow, onCreated, onError }: {
   projectId: string | null;
+  /** opened from a wild card's "Make one like this": start with that template picked */
+  preset?: { style: string; at: number } | null;
   comments: Comment[];
   narrow: boolean;
   onCreated: (id: string) => void;
@@ -41,6 +44,13 @@ export function NewEdit({ projectId, comments, narrow, onCreated, onError }: {
   // the look for this video: the house style (null) or a wild card template; house unless picked, every time
   const [style, setStyle] = useState<string | null>(null);
   const [templates, setTemplates] = useState<TemplateInfo[]>([]);
+  // music: none (voice only, the house default), "auto" (Claude picks) or a track in the music bank
+  const [music, setMusic] = useState<string | null>(null);
+  const [tracks, setTracks] = useState<Track[]>([]);
+  const [measuringMusic, setMeasuringMusic] = useState(0);
+  const [trackList, setTrackList] = useState(false);
+  const [playing, setPlaying] = useState<string | null>(null);
+  const player = useRef<HTMLAudioElement | null>(null);
   const [over, setOver] = useState<Dest | null>(null);
   const [starting, setStarting] = useState(false);
   const idRef = useRef(projectId);
@@ -49,13 +59,13 @@ export function NewEdit({ projectId, comments, narrow, onCreated, onError }: {
   const input = useRef<HTMLInputElement>(null);
   const extraInput = useRef<HTMLInputElement>(null);
   // uploads take minutes: read what the user set by the time they finish, not when they began
-  const live = useRef({ note, auto, rows, building: false, format, folders, style, hasRaw: false });
+  const live = useRef({ note, auto, rows, building: false, format, folders, style, music, hasRaw: false });
 
   const build = comments.find((c) => c.target.kind === "build" && c.status !== "stopped" && c.status !== "failed");
   const lastBuild = [...comments].reverse().find((c) => c.target.kind === "build");
   const sending = rows.some((r) => r.state === "sending" || r.state === "waiting");
   const hasRaw = rows.some((r) => r.dest === "raw") || !!raw?.files.length;
-  live.current = { note, auto, rows, building: !!build, format, folders, style, hasRaw };
+  live.current = { note, auto, rows, building: !!build, format, folders, style, music, hasRaw };
   const allDone = hasRaw && rows.every((r) => r.state === "done") && !(rows.length === 0 && raw?.pending.length);
 
   const refresh = () => projectId && api.raw(projectId).then((r) => {
@@ -64,11 +74,66 @@ export function NewEdit({ projectId, comments, narrow, onCreated, onError }: {
     if (r.format) setFormat(r.format);
     if (r.folders.length) setFolders(r.folders);
     if (r.style) setStyle(r.style);
+    if (r.music) {
+      setMusic(r.music);
+      if (r.music !== "auto") setTrackList(true);
+    }
   }).catch(() => {});
   useEffect(() => {
     api.libraryFolders().then(setLibrary).catch(() => {});
     api.templates().then(setTemplates).catch(() => {});
   }, []);
+  // the bank is measured on first look; tracks dropped in by hand show up once they're measured
+  useEffect(() => {
+    let stop = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const load = () =>
+      api.music().then((m) => {
+        if (stop) return;
+        setTracks(m.tracks);
+        setMeasuringMusic(m.measuring);
+        if (m.measuring) timer = setTimeout(load, 4000);
+      }).catch(() => {});
+    load();
+    return () => {
+      stop = true;
+      clearTimeout(timer);
+      player.current?.pause();
+    };
+  }, []);
+  const pickStyle = (slug: string | null) => {
+    const was = templates.find((t) => t.slug === style)?.track ?? null;
+    const now = templates.find((t) => t.slug === slug)?.track ?? null;
+    setStyle(slug);
+    // a template made from a reel brings that reel's track; leaving it drops the track again
+    if (now) {
+      setMusic(now);
+      setTrackList(true);
+    } else if (was && music === was) setMusic(null);
+  };
+  // a preset applies once its template is known (and again if another card's button is pressed)
+  const applied = useRef(0);
+  useEffect(() => {
+    if (!preset || applied.current === preset.at) return;
+    const t = templates.find((x) => x.slug === preset.style);
+    if (!t) return;
+    applied.current = preset.at;
+    pickStyle(t.slug);
+    if (t.line) setNote((n) => n || `On screen: "${t.line}"`);
+  }, [preset, templates]);
+  const play = (t: Track) => {
+    if (!player.current) {
+      player.current = new Audio();
+      player.current.onended = () => setPlaying(null);
+    }
+    if (playing === t.path) {
+      player.current.pause();
+      setPlaying(null);
+      return;
+    }
+    player.current.src = api.musicUrl(t.path);
+    player.current.play().then(() => setPlaying(t.path)).catch(() => setPlaying(null));
+  };
   const pickFormat = (f: Format) => {
     setFormat(f);
     try {
@@ -145,7 +210,7 @@ export function NewEdit({ projectId, comments, narrow, onCreated, onError }: {
     if (!id) return;
     setStarting(true);
     try {
-      await api.build(id, live.current.note, live.current.format, live.current.folders, live.current.style);
+      await api.build(id, live.current.note, live.current.format, live.current.folders, live.current.style, live.current.music);
     } catch (e: any) {
       onError(e.message);
     } finally {
@@ -311,7 +376,7 @@ export function NewEdit({ projectId, comments, narrow, onCreated, onError }: {
                       key={t.slug ?? "house"}
                       role="radio"
                       aria-checked={on}
-                      onClick={() => setStyle(t.slug)}
+                      onClick={() => pickStyle(t.slug)}
                       title={t.slug ? (t as TemplateInfo).useWhen ?? "" : "Your usual edit: the house style"}
                       className={cx("rounded-full px-2.5 py-1 text-[12px] ring-1 transition", on ? "bg-gold/15 text-gold ring-gold/40" : "text-ink-300 ring-white/10 hover:ring-white/25")}
                     >
@@ -331,6 +396,77 @@ export function NewEdit({ projectId, comments, narrow, onCreated, onError }: {
                   </div>
                 ) : null;
               })()}
+            </div>
+          )}
+          {(tracks.length > 0 || measuringMusic > 0) && (
+            <div className="mt-4">
+              <div className="text-[12px] font-medium text-ink-300">Music</div>
+              <div className="mt-1.5 flex flex-wrap gap-1.5" role="radiogroup" aria-label="Music">
+                {([
+                  ["none", "None", "Voice only, your usual"],
+                  ["auto", "Claude picks", "Claude picks a track from your music folder that fits the cut"],
+                  ["track", "Choose a track", "Pick one of your tracks"],
+                ] as const).map(([k, label, tip]) => {
+                  const on = k === "none" ? music === null : k === "auto" ? music === "auto" : !!music && music !== "auto";
+                  return (
+                    <button
+                      key={k}
+                      role="radio"
+                      aria-checked={on}
+                      title={tip}
+                      onClick={() => {
+                        if (k === "none") (setMusic(null), setTrackList(false));
+                        else if (k === "auto") (setMusic("auto"), setTrackList(false));
+                        else setTrackList((v) => !v || !on);
+                      }}
+                      className={cx("rounded-full px-2.5 py-1 text-[12px] ring-1 transition", on ? "bg-gold/15 text-gold ring-gold/40" : "text-ink-300 ring-white/10 hover:ring-white/25")}
+                    >
+                      {k === "track" && music && music !== "auto" ? `♪ ${tracks.find((t) => t.path === music)?.name ?? music.split("/").pop()}` : label}
+                    </button>
+                  );
+                })}
+              </div>
+              {trackList && (
+                <div data-tracklist className="relative mt-2 max-h-56 overflow-y-auto rounded-lg bg-ink-900 ring-1 ring-white/5">
+                  {tracks.map((t, i) => {
+                    const on = music === t.path;
+                    const head = i === 0 || tracks[i - 1].folder !== t.folder;
+                    return (
+                      <div key={t.path}>
+                        {head && <div className="px-3 pb-1 pt-2 text-[11px] uppercase tracking-wide text-ink-500">{t.folder ? "From shared reels" : "Your tracks"}</div>}
+                        <div ref={on ? (el) => {
+                          // scroll only the list (not the page) so the picked track shows
+                          const box = el?.closest<HTMLElement>("[data-tracklist]");
+                          if (el && box && (el.offsetTop < box.scrollTop || el.offsetTop + el.offsetHeight > box.scrollTop + box.clientHeight)) box.scrollTop = el.offsetTop - 32;
+                        } : undefined} className={cx("flex items-center gap-2 px-2 py-1.5", on && "bg-gold/10")}>
+                          <button
+                            onClick={() => play(t)}
+                            aria-label={playing === t.path ? `Stop ${t.name}` : `Play ${t.name}`}
+                            className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-ink-300 ring-1 ring-white/10 hover:text-ink-100 hover:ring-white/25"
+                          >
+                            {playing === t.path ? (
+                              <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><rect x="1" y="1" width="3" height="8" /><rect x="6" y="1" width="3" height="8" /></svg>
+                            ) : (
+                              <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><path d="M2 1l7 4-7 4z" /></svg>
+                            )}
+                          </button>
+                          <button onClick={() => setMusic(on ? null : t.path)} aria-pressed={on} className="min-w-0 flex-1 text-left">
+                            <div className={cx("truncate text-[12px]", on ? "text-gold" : "text-ink-100")}>{t.name}</div>
+                            <div className="truncate text-[11px] text-ink-500">
+                              {[t.bpm ? `${Math.round(t.bpm)} BPM` : null, mmss(t.lengthS), t.from?.handle ? `from @${t.from.handle}` : null, t.note].filter(Boolean).join(" · ")}
+                            </div>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {measuringMusic > 0 && <div className="px-3 py-2 text-[11px] text-ink-500">Measuring {measuringMusic} new track{measuringMusic > 1 ? "s" : ""}…</div>}
+                </div>
+              )}
+              {music && music !== "auto" && tracks.find((t) => t.path === music)?.from && (
+                <div className="mt-1.5 text-[11px] leading-relaxed text-ink-500">Someone else's track: it's there for timing. When you post, add the same sound in Instagram instead of uploading it.</div>
+              )}
+              {trackList && <div className="mt-1.5 text-[11px] text-ink-500">Add tracks by dropping them into the background music folder.</div>}
             </div>
           )}
           {library.length > 0 && (

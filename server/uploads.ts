@@ -129,7 +129,8 @@ type FileRow = { name: string; size: number };
 type PendingRow = FileRow & { received: number; dest?: Dest };
 /** What the build was asked for besides the footage: the format the user picked and library folders to draw from. */
 /** style: a wild card template's folder name in Video Editor/templates, or null for the house style. */
-export type BuildOptions = { format: Format | null; folders: string[]; style: string | null };
+/** music: null for none (the house default, voice only), "auto" for Claude to pick, or a track's path in the bank. */
+export type BuildOptions = { format: Format | null; folders: string[]; style: string | null; music: string | null };
 export type RawInfo = { files: FileRow[]; pending: PendingRow[]; note: string; resources: FileRow[] } & BuildOptions;
 
 const list = (dir: string, dest: Dest): FileRow[] =>
@@ -145,9 +146,10 @@ export function buildOptions(p: Project): BuildOptions {
       format: FORMATS.includes(o.format) ? o.format : null,
       folders: Array.isArray(o.folders) ? o.folders.filter((x: unknown) => typeof x === "string") : [],
       style: typeof o.style === "string" && /^[a-z0-9-]{1,60}$/.test(o.style) ? o.style : null,
+      music: typeof o.music === "string" && o.music.length <= 400 ? o.music : null,
     };
   } catch {
-    return { format: null, folders: [], style: null };
+    return { format: null, folders: [], style: null, music: null };
   }
 }
 export function saveBuildOptions(p: Project, o: BuildOptions) {

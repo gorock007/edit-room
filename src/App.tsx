@@ -73,6 +73,8 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
   const [wild, setWild] = useState(() => location.hash.startsWith("#wild"));
   const [wildTick, setWildTick] = useState(0);
   const [wildNew, setWildNew] = useState(0);
+  // "Make one like this" on a wild card: open New edit with that template picked
+  const [preset, setPreset] = useState<{ style: string; at: number } | null>(null);
   const [sharing, setSharing] = useState(false);
   const narrow = useNarrow();
   const [tab, setTab] = useState<"comments" | "words" | "checks" | "timeline" | "history">("comments");
@@ -634,7 +636,18 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
       )}
 
       {wild && startsEdits ? (
-        <WildCards narrow={narrow} tick={wildTick} owner={me.role === "owner"} onClose={closeWild} onError={setError} />
+        <WildCards
+          narrow={narrow}
+          tick={wildTick}
+          owner={me.role === "owner"}
+          onClose={closeWild}
+          onError={setError}
+          onUse={(slug) => {
+            setPreset({ style: slug, at: Date.now() });
+            setPid(NEW);
+            closeWild();
+          }}
+        />
       ) : (
       <div className={cx("flex min-h-0 flex-1", narrow && "flex-col overflow-y-auto")}>
         <main className={cx("flex min-w-0 flex-col", narrow ? (comparing || !model ? "" : "sticky top-0 z-30 bg-ink-950") : "flex-1 overflow-y-auto")}>
@@ -738,6 +751,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
             <NewEdit
               key="new-edit"
               projectId={pid === NEW ? null : pid}
+              preset={pid === NEW ? preset : null}
               comments={comments}
               narrow={narrow}
               onCreated={async (id) => {

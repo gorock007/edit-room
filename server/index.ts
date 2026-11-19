@@ -22,6 +22,7 @@ import { mcpHandler } from "./mcp.ts";
 import { versionProject } from "./versions.ts";
 import { readUsage } from "./usage.ts";
 import { checksState, scheduleChecks, setOk } from "./checks.ts";
+import { MUSIC_DIR, listMusic, musicFile } from "./music.ts";
 import { WILD_ROOT, WildError, folderOf, listTemplates, templateOf, listWild, recoverWildJobs, setDecision, startPlan, startTemplate, stopWildJob, wildDetail, wildFile, type Decision } from "./wildcards.ts";
 import { DRIVER, GSAP_CDN_SRC, LOCAL_GSAP, OVERLAY_CSP, localGsapUrl, stillSeek } from "./overlay.ts";
 
@@ -397,13 +398,16 @@ app.post("/api/projects/:id/build", need("editor"), withProject((p, req, res) =>
   const style = req.body?.style == null || req.body.style === "" ? null : String(req.body.style);
   const tpl = style ? templateOf(style) : null;
   if (style && !tpl) return res.status(400).json({ error: "that template doesn't exist any more" });
+  // music: none (voice only, the house default), "auto" (Claude picks from the bank) or one track in the bank
+  const music = req.body?.music == null || req.body.music === "" ? null : String(req.body.music);
+  if (music && music !== "auto" && !musicFile(music)) return res.status(400).json({ error: "that track isn't in the music folder any more" });
   saveNote(p, note);
-  saveBuildOptions(p, { format, folders, style });
+  saveBuildOptions(p, { format, folders, style, music });
   const c: Comment = {
     id: newId(),
     project: p.id,
     createdAt: Date.now(),
-    text: `Build the first edit in ${format}${tpl ? `, in the "${tpl.title}" template` : ""}.${raw.resources.length ? ` ${raw.resources.length} extra file${raw.resources.length > 1 ? "s" : ""} to use.` : ""}${note ? ` ${note}` : ""}`,
+    text: `Build the first edit in ${format}${tpl ? `, in the "${tpl.title}" template` : ""}${music === "auto" ? ", music picked by Claude" : music ? `, music "${path.basename(music).replace(/\.[^.]+$/, "")}"` : ""}.${raw.resources.length ? ` ${raw.resources.length} extra file${raw.resources.length > 1 ? "s" : ""} to use.` : ""}${note ? ` ${note}` : ""}`,
     t: 0,
     x: null,
     y: null,
@@ -627,7 +631,7 @@ app.post("/api/wildcards/:id/plan", need("owner"), wild((req, res) => {
   res.json({ ok: true });
 }));
 app.post("/api/wildcards/:id/template", need("owner"), wild((req, res) => {
-  startTemplate(String(req.params.id), req.body?.name, req.body?.note, wildChanged);
+  startTemplate(String(req.params.id), req.body?.name, req.body?.note, wildChanged, req.body?.exact === true);
   res.json({ ok: true });
 }));
 app.post("/api/wildcards/:id/stop", need("owner"), wild((req, res) => {
@@ -635,6 +639,17 @@ app.post("/api/wildcards/:id/stop", need("owner"), wild((req, res) => {
   res.json({ ok: true });
 }));
 app.get("/api/templates", need("editor"), (_req, res) => res.json(listTemplates()));
+
+// ---- the music bank (background music/, measured into catalog.json) ----
+const musicChanged = () => send({ type: "music", at: Date.now() });
+app.get("/api/music", need("editor"), (_req, res) => res.json(listMusic(musicChanged)));
+app.get("/media/music/{*rest}", need("editor"), (req, res) => {
+  const rest = ([] as string[]).concat((req.params as any).rest ?? []).join("/");
+  const f = musicFile(rest);
+  if (!f) return res.status(404).end();
+  res.sendFile(f);
+});
+fs.mkdirSync(MUSIC_DIR, { recursive: true });
 app.get("/media/wild/:id/{*rest}", need("editor"), wildOk, wild((req, res) => {
   const rest = ([] as string[]).concat((req.params as any).rest ?? []).join("/");
   folderOf(String(req.params.id));

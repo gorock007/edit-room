@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { query, tool, createSdkMcpServer, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import { MUSIC_DIR, musicInfo } from "./music.ts";
 import { CAPCUT_DRAFTS, DATA_DIR, READ_ROOTS, SKILL_DIR, VIDEO_ROOT, WRITE_ROOTS, inside } from "./config.ts";
 import { getProject, onScreen, readModel, type Project } from "./projects.ts";
 import { buildProxy, grabFrame, patchProxy, proxyFile, proxyState } from "./proxy.ts";
@@ -148,6 +149,21 @@ animation, colours, fonts, captions, sound, and its "never do" list. Everything 
 expects: ${tpl.needs ?? "(not stated)"}. If the footage doesn't fit, build the closest version and say what's missing.
 Write "style": "${tpl.slug}" into edit-data/build_cfg.json.`
     : "Style: the house look (no template picked).";
+  const catalog = path.join(MUSIC_DIR, "catalog.json");
+  const track = raw.music && raw.music !== "auto" ? musicInfo(raw.music) : null;
+  const tune =
+    raw.music === "auto"
+      ? `Music: the user asked you to pick a bed from their music folder ${MUSIC_DIR}. ${catalog} has every track's
+length, BPM, beat times and strongest hits (and the user's own note on some). Pick one that fits the cut's length and
+energy, prefer their own tracks over "from reels/", and say which and why in the plan note.`
+      : raw.music && track
+        ? `Music: the user picked "${path.join(MUSIC_DIR, raw.music)}" (${track.bpm ?? "?"} BPM, ${track.length_s ?? "?"} s, first beat at
+${track.first_beat_s ?? "?"} s). Its beat times and strongest hits are in ${catalog} under "${raw.music}". Where the style
+cuts to music, land cuts on its beats and the ending on a hit. Under a voice keep it a bed (the skill's music level);
+with no voice it carries the video at the template's level.${track.source ? ` It came from someone else's reel
+(${track.source.link ?? track.source.handle}): fine for timing and preview; in your final reply remind the user to post
+without it and add the same sound in the app.` : ""}`
+        : `Music: none picked: voice only, the house default.${tpl ? " If the template's Sound section needs a bed, cut to its tempo and say that a track is missing." : ""}`;
   return `The user uploaded raw footage for a NEW edit from Edit Room and pressed the button. They expect to come back to a
 finished edit without being asked anything in between.
 
@@ -157,6 +173,8 @@ ${raw.files.map((f) => `- ${f.name} (${gb(f.size)})`).join("\n")}
 Format: ${raw.format ?? "9:16"} (the user chose it; deliver only this format).
 
 ${look}
+
+${tune}
 
 Extra material the user gave for THIS video (in ${resourcesDir(p)}):
 ${raw.resources.length ? raw.resources.map((f) => `- ${f.name} (${gb(f.size)})`).join("\n") : "(none)"}
