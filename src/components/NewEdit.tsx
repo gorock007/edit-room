@@ -144,7 +144,13 @@ export function NewEdit({ projectId, preset, comments, narrow, onCreated, onErro
     setRaw(null);
     refresh();
   }, [projectId]);
-  useEffect(() => () => abort.current.abort(), []);
+  // a fresh controller per mount: React's dev double-mount runs this cleanup once at start, and reusing the
+  // first controller left it aborted, so every upload failed at 0% with "cancelled"
+  useEffect(() => {
+    const c = new AbortController();
+    abort.current = c;
+    return () => c.abort();
+  }, []);
 
   // leaving mid-upload loses the rest (it resumes if the same file is picked again)
   useEffect(() => {

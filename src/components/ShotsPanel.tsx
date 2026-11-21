@@ -118,11 +118,13 @@ function SwapSheet({ pid, shot, onClose, onError, onDone }: { pid: string; shot:
       .catch((e) => onError(e.message));
   useEffect(() => {
     load();
+    const c = new AbortController(); // fresh per mount, see NewEdit
+    abort.current = c;
     const esc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", esc);
     return () => {
       window.removeEventListener("keydown", esc);
-      abort.current.abort();
+      c.abort();
     };
   }, []);
 
