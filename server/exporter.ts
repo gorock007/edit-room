@@ -63,6 +63,11 @@ const overlayHash = (p: Project) => {
     return "";
   }
 };
+/**
+ * A render of overlays/index.html: captions.mov, or a renamed copy such as captions_9x16_v2.mov (1121b's 9:16 cut).
+ * Matching only "captions.mov" skipped the re-render for that cut, so its export shipped the old captions.
+ */
+export const isCaptionRender = (file: string) => /^captions[^/]*\.mov$/i.test(path.basename(file));
 function captionsFile(p: Project): string | null {
   if (!p.draftDir || !p.overlaysDir) return null;
   try {
@@ -70,7 +75,7 @@ function captionsFile(p: Project): string | null {
     const seg = d.tracks?.find((t: any) => t.type === "video" && t.name === "Captions")?.segments?.[0];
     const m = seg && d.materials.videos.find((v: any) => v.id === seg.material_id);
     const file = m?.path?.replace(/##_draftpath_placeholder_[^#]*_##/, p.draftDir);
-    return file && path.basename(file) === "captions.mov" ? file : null;
+    return file && isCaptionRender(file) ? file : null;
   } catch {
     return null;
   }

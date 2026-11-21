@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { draftMediaFiles, readModel, type EditModel, type Project } from "./projects.ts";
 import { proxyFile, proxyState } from "./proxy.ts";
 import { STAGE_CONFIG, isStage, stageWords } from "./cut.ts";
+import { isCaptionRender } from "./exporter.ts";
 
 /**
  * Checks: Edit Room watches and listens to the preview so the person doesn't have to find the same faults by hand
@@ -215,7 +216,7 @@ async function frameStats(proxy: string): Promise<[number, number, number][]> {
 function structure(p: Project, m: EditModel): Issue[] {
   const out: Issue[] = [];
   // media the export reads: a missing file fails the export (captions.mov is re-rendered, so it doesn't count)
-  const missing = [...new Set(draftMediaFiles(p.draftDir!).filter((f) => f && path.basename(f) !== "captions.mov" && !fs.existsSync(f)))];
+  const missing = [...new Set(draftMediaFiles(p.draftDir!).filter((f) => f && !isCaptionRender(f) && !fs.existsSync(f)))];
   const used = new Set([...m.cuts, ...m.broll].map((s) => s.file).concat(m.sfx.map((s) => s.file)));
   const needed = missing.filter((f) => used.has(f));
   if (needed.length)
