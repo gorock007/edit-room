@@ -518,6 +518,8 @@ app.post("/api/projects/:id/shots/:i", need("editor"), withProject(async (p, req
 // ---- export for Reels / TikTok ----
 app.get("/api/projects/:id/export", withProject((p, _req, res) => res.json(exportState(p))));
 app.post("/api/projects/:id/export", withProject((p, req, res) => res.json(room.startExport(p, me(req)))));
+// five title hooks to compare and pick the cover from (also made after every first edit: hookOptions.ts)
+app.post("/api/projects/:id/hook-options", need("editor"), withProject((p, req, res) => res.json(room.hookOptions(p, me(req)))));
 
 app.post("/api/projects/:id/proxy", need("editor"), withProject((p, _req, res) => {
   buildProxy(p, () => projectChanged(p));
@@ -656,7 +658,7 @@ app.get("/overlay/:id/{*rest}", withProject((p, req, res) => {
   let rest = ([] as string[]).concat((req.params as any).rest ?? []).join("/") || "index.html";
   if (rest === "__room/gsap.min.js") return res.set("Content-Security-Policy", OVERLAY_CSP).type("js").sendFile(LOCAL_GSAP, { dotfiles: "allow" }); // instead of the CDN (overlay.ts)
   let dir = p.overlaysDir;
-  const m = rest.match(/^o\/([a-f0-9]{10})\/([A-D])\/(.*)$/);
+  const m = rest.match(/^o\/([a-f0-9]{10})\/([A-E])\/(.*)$/);
   if (m) {
     if (!hasOption(p, m[1], m[2])) return res.status(404).end();
     dir = optionProject(p, m[1], m[2]).overlaysDir;

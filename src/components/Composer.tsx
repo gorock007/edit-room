@@ -67,7 +67,7 @@ export function Composer({ target, t, onSubmit, onCancel, onFocus, compact, wide
       />
       <div className="mt-2 flex items-center justify-between gap-1.5">
         <div className="flex rounded-md bg-ink-950/60 p-0.5 ring-1 ring-white/5" title="Ask for options to compare side by side before anything changes">
-          {[1, 2, 3].map((n) => (
+          {[1, 2, 3, 5].map((n) => (
             <button
               key={n}
               onClick={() => setWant(n)}

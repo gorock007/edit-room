@@ -466,7 +466,7 @@ export default function App({ me, remote, onMeChanged, onLogout }: AppProps) {
   };
 
   const busy = comments.filter((c) => c.status === "working").length;
-  const cols = narrow || cells.length <= 1 ? 1 : 2;
+  const cols = narrow || cells.length <= 1 ? 1 : cells.length > 4 ? 3 : 2; // current + 5 hook options = 3 x 2
   const dev: Device = narrow ? "desktop" : device; // on a real phone the phone is the frame
   const aspect = model ? `${model.width} / ${model.height}` : "16 / 9";
   const rows = Math.ceil(cells.length / cols);

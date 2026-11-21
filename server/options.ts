@@ -9,7 +9,7 @@ import type { Project } from "./projects.ts";
  * other entry a symlink to the real one. Everything that reads a project (the model, the caption server, preview.py)
  * then works on the shadow as if it were the project.
  */
-export const KEYS = ["A", "B", "C", "D"];
+export const KEYS = ["A", "B", "C", "D", "E"]; // five: the title hook options (hookOptions.ts)
 export const optDir = (p: Project, cid: string, key: string) => path.join(p.dataDir, "options", cid, key);
 
 type Saved = { key: string; note: string; index: Record<string, string> };

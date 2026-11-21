@@ -1,13 +1,14 @@
 import os from "node:os";
 import path from "node:path";
 import { CAPCUT_DRAFTS, DATA_DIR, SKILL_DIR, VIDEO_ROOT } from "./config.ts";
-import { readModel, type Project } from "./projects.ts";
+import { getProject, readModel, type Project } from "./projects.ts";
 import { buildProxy, patchProxy, proxyState, pruneKeptProxies, restoreKeptProxy } from "./proxy.ts";
 import { exportState, startExport } from "./exporter.ts";
 import { INTERRUPTED, enqueue, isRunning, quiet, stop } from "./agent.ts";
 import { CutError, STAGE_CONFIG, applyCut, isStage, rebuildStageCaptions, transcript } from "./cut.ts";
 import fs from "node:fs";
 import { KEYS, applyOption, hasOption } from "./options.ts";
+import { HOOK_OPTIONS, HOOK_REQUEST, canMakeHookOptions, makeHookOptions } from "./hookOptions.ts";
 import { OWNER, can, type Person } from "./people.ts";
 import { changedSince, loadComments, newId, restore, saveComments, snapshot, updateComment, type Author, type Comment, type Target, type Tier } from "./store.ts";
 import { TIER_NAMES } from "./router.ts";
@@ -132,7 +133,7 @@ export function makeRoom(e: Emitters) {
     overlayChanged: e.overlayChanged,
     checksChanged: e.checksChanged,
     starting: (p: Project) => rec(p, () => syncOutside(p)),
-    finished: (p: Project, c: Comment) =>
+    finished: (p: Project, c: Comment) => {
       rec(p, () =>
         record(p, {
           kind: c.target.kind === "build" ? "build" : "comment",
@@ -140,8 +141,38 @@ export function makeRoom(e: Emitters) {
           by: c.author,
           comment: c.id,
         }),
-      ),
+      );
+      // every first edit is followed by five title hook options to pick the cover from (the user, 2026-11-21)
+      if (c.target.kind === "build" && c.status === "done") startHookOptions(getProject(p.id) ?? p, c.author);
+    },
   };
+  /** Five title hooks to compare: made directly for house captions, by the agent (5 options) for stage edits. */
+  function startHookOptions(p: Project, author: Author | undefined): Comment | null {
+    if (canMakeHookOptions(p)) {
+      makeHookOptions(p, author, e.emitComment).catch(() => {});
+      return null;
+    }
+    if (!p.overlaysDir) return null;
+    const c: Comment = {
+      id: newId(),
+      project: p.id,
+      createdAt: Date.now(),
+      text: HOOK_REQUEST,
+      t: 0,
+      x: null,
+      y: null,
+      target: { kind: "general", label: "the title hook", detail: "the cover, from 0 s" },
+      status: "queued",
+      activity: [],
+      want: HOOK_OPTIONS,
+      author,
+      pick: "auto",
+    };
+    saveComments(p, [...loadComments(p), c]);
+    e.emitComment(c);
+    enqueue(p, c.id, hooks);
+    return c;
+  }
   const find = (p: Project, cid: string) => {
     const c = loadComments(p).find((x) => x.id === cid);
     if (!c) throw new RoomError(404, "no such comment");
@@ -152,6 +183,16 @@ export function makeRoom(e: Emitters) {
   };
 
   return {
+    /** Five title hook options for this edit, to compare and pick from (also run after every first edit). */
+    hookOptions(p: Project, who: Person) {
+      if (!runsDirectly(who)) throw new RoomError(403, "Only an editor with access to every project can start Claude.");
+      if (!p.draftDir || !p.overlaysDir) throw new RoomError(400, "this edit has no captions yet");
+      if (loadComments(p).some((c) => c.target.label === "the title hook" && ["queued", "working"].includes(c.status)))
+        throw new RoomError(409, "Title hook options are already being made.");
+      startHookOptions(p, authorOf(who));
+      return { ok: true };
+    },
+
     /** An approver's comment goes to the agent at once (like Claude Design); anyone else's waits for approval. */
     postComment(p: Project, who: Person, b: { text?: unknown; t?: unknown; x?: unknown; y?: unknown; target?: Target; want?: unknown; pick?: unknown }) {
       needRole(who, "commenter");

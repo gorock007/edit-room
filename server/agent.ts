@@ -596,6 +596,7 @@ const FALLBACK_DIRECTIONS = [
   "a bolder take: push the idea further",
   "a different approach to the same goal",
   "the subtlest take that still answers it",
+  "an unexpected take a viewer wouldn't see coming",
 ];
 
 /** One short Sonnet call: N clearly different directions for the options, so parallel runs don't all make the same one. */
@@ -626,7 +627,7 @@ async function planDirections(c: Comment, p: Project, n: number): Promise<string
   }
   const lines = out
     .split("\n")
-    .map((l) => /^\s*\**([A-D])\**\s*[:.)-]\s*(.+)$/.exec(l))
+    .map((l) => /^\s*\**([A-E])\**\s*[:.)-]\s*(.+)$/.exec(l))
     .filter(Boolean)
     .map((m) => m![2].trim());
   return Array.from({ length: n }, (_, i) => lines[i] ?? FALLBACK_DIRECTIONS[i]);
