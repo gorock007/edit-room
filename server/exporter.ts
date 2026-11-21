@@ -75,7 +75,12 @@ function captionsFile(p: Project): string | null {
     const seg = d.tracks?.find((t: any) => t.type === "video" && t.name === "Captions")?.segments?.[0];
     const m = seg && d.materials.videos.find((v: any) => v.id === seg.material_id);
     const file = m?.path?.replace(/##_draftpath_placeholder_[^#]*_##/, p.draftDir);
-    return file && isCaptionRender(file) ? file : null;
+    if (!file || !isCaptionRender(file)) return null;
+    // the export overwrites this file: only ever one inside the draft folder, and never through a symlink
+    const abs = path.resolve(file), rel = path.relative(path.resolve(p.draftDir), abs);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return null;
+    if (fs.lstatSync(abs, { throwIfNoEntry: false })?.isSymbolicLink()) return null;
+    return abs;
   } catch {
     return null;
   }
