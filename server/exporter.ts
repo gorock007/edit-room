@@ -68,6 +68,24 @@ const overlayHash = (p: Project) => {
  * Matching only "captions.mov" skipped the re-render for that cut, so its export shipped the old captions.
  */
 export const isCaptionRender = (file: string) => /^captions[^/]*\.mov$/i.test(path.basename(file));
+/**
+ * The export overwrites the caption render, and the draft (which names it) is written by agents: only ever a file
+ * whose real folder is inside the draft's real folder, and which is not itself a symlink. Checked again just before
+ * the write, so a folder swapped for a link mid-export doesn't count.
+ */
+function safeCaptionPath(p: Project, file: string): string | null {
+  try {
+    const realDraft = fs.realpathSync(p.draftDir!);
+    const realParent = fs.realpathSync(path.dirname(path.resolve(file)));
+    const rel = path.relative(realDraft, realParent);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) return null;
+    const abs = path.join(realParent, path.basename(file));
+    if (fs.lstatSync(abs, { throwIfNoEntry: false })?.isSymbolicLink()) return null;
+    return abs;
+  } catch {
+    return null;
+  }
+}
 function captionsFile(p: Project): string | null {
   if (!p.draftDir || !p.overlaysDir) return null;
   try {
@@ -76,11 +94,7 @@ function captionsFile(p: Project): string | null {
     const m = seg && d.materials.videos.find((v: any) => v.id === seg.material_id);
     const file = m?.path?.replace(/##_draftpath_placeholder_[^#]*_##/, p.draftDir);
     if (!file || !isCaptionRender(file)) return null;
-    // the export overwrites this file: only ever one inside the draft folder, and never through a symlink
-    const abs = path.resolve(file), rel = path.relative(path.resolve(p.draftDir), abs);
-    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return null;
-    if (fs.lstatSync(abs, { throwIfNoEntry: false })?.isSymbolicLink()) return null;
-    return abs;
+    return safeCaptionPath(p, file);
   } catch {
     return null;
   }
@@ -122,9 +136,12 @@ function renderCaptions(p: Project, work: string, onStage: (s: string) => void):
       pr.on("close", () => {
         if (Math.abs(+dur - want) > 1.5 / 30)
           return reject(new Error(`caption render is ${(+dur).toFixed(2)} s but the cut is ${want.toFixed(2)} s; rebuild captions (build_captions.py) first`));
-        // swap in place (same name the draft points at), atomically
-        fs.copyFileSync(out, file + ".tmp");
-        fs.renameSync(file + ".tmp", file);
+        // swap in place (same name the draft points at), atomically: re-check the target, then a fresh temp name
+        // that refuses to overwrite anything (COPYFILE_EXCL)
+        if (safeCaptionPath(p, file) !== file) return reject(new Error("the caption file moved or became a link during the export"));
+        const tmpFile = `${file}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+        fs.copyFileSync(out, tmpFile, fs.constants.COPYFILE_EXCL);
+        fs.renameSync(tmpFile, file);
         fs.writeFileSync(captionsRecord(p), JSON.stringify({ overlay: hash, stamp: mediaStamp([file]), at: Date.now() }));
         resolve();
       });
