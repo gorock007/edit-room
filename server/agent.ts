@@ -64,6 +64,11 @@ How the preview is built, so your change shows up:
     - caption size, line height, position: "style"; which words share a line, and keyword colours: overlays/lines.txt.
   The explainers are stage shots: scenes in <edit>/stage/scenes/*.html, rendered off iCloud, composited by
   scripts/stage_shot.py into the B-roll track's stage_<id>.mp4. A cut moves them all at once: use room_cut.
+- House-caption edits (overlays/caption_layout.json, no stage_captions.json): the opening title hook is the "hook" entry
+  in caption_layout.json ({"until", "small", "big", "chin_top", "chin_height"}; captions sit under the mouth at chin_top
+  while it shows). Change it there and rebuild with \`python3 -I <skill>/assets/overlay-template/build_captions.py
+  <overlays>\`, never by editing overlays/index.html. Every video keeps a hook of at least 5 s (the user, 2026-11-21):
+  don't shorten it below that or remove it unless the comment explicitly asks to.
 - To take time out of any edit (a pause, a breath, a word, a silence at the start or end) use room_cut. It cuts the
   draft, the cards, the captions, the stage shots, their sounds and the titles together, exactly, and patches the
   preview in seconds. Do not shift times by hand across files.
